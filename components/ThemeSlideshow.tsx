@@ -26,10 +26,12 @@ export default function ThemeSlideshow({
 }: Props) {
   const [active, setActive] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [previewRequested, setPreviewRequested] = useState(false);
   const [direction] = useState<'left'>('left');
 
   // Buat fallback minimal 1 image
   const slides = images.length > 0 ? images.slice(0, 3) : [];
+  const visibleSlides = previewRequested ? slides : slides.slice(0, 1);
 
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const slideTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -63,6 +65,7 @@ export default function ThemeSlideshow({
     if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
     holdTimerRef.current = setTimeout(() => {
       if (isHoldingRef.current) {
+        setPreviewRequested(true);
         startPlaying();
       }
     }, HOLD_MS);
@@ -114,7 +117,7 @@ export default function ThemeSlideshow({
             {noImageLabel}
           </div>
         ) : (
-          slides.map((img, i) => {
+          visibleSlides.map((img, i) => {
             const isActive = i === active;
             // Animasi: gambar yang aktif di center (translateX 0).
             // Gambar yang baru saja keluar geser ke kiri penuh (-100%).
@@ -139,6 +142,8 @@ export default function ThemeSlideshow({
                   src={img.image_url}
                   alt={`${themeName} - slide ${i + 1}`}
                   className="w-full h-full object-contain"
+                  loading={i === 0 ? 'eager' : 'lazy'}
+                  decoding="async"
                   draggable={false}
                 />
               </div>

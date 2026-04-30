@@ -11,11 +11,22 @@ import {
 
 export const runtime = 'nodejs';
 
+const DEFAULT_LIMIT = 4;
+const MAX_LIMIT = 12;
+
+function readPageParam(value: string | null, fallback: number) {
+  const parsed = Number.parseInt(value || '', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const gender = searchParams.get('gender') as Gender | null;
   const parentsContent = searchParams.get('parents_content') as ParentsContent | null;
   const packageCode = searchParams.get('package_code') as PackageCode | null;
+  const requestedLimit = readPageParam(searchParams.get('limit'), DEFAULT_LIMIT);
+  const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIMIT);
+  const offset = readPageParam(searchParams.get('offset'), 0);
 
   if (!gender || !GENDERS.includes(gender)) {
     return NextResponse.json({ error: 'Gender tidak valid.' }, { status: 400 });
@@ -40,23 +51,43 @@ export async function GET(req: NextRequest) {
 
   const eligibleIds = (packageRows || []).map((row) => row.theme_id);
   if (eligibleIds.length === 0) {
-    return NextResponse.json({ themes: [] });
+    return NextResponse.json({
+      themes: [],
+      pagination: {
+        total: 0,
+        limit,
+        offset,
+        has_previous: offset > 0,
+        has_next: false,
+      },
+    });
   }
 
-  const { data: themes, error: themesError } = await supabase
+  const { data: themes, error: themesError, count } = await supabase
     .from('themes')
-    .select('*')
+    .select('*', { count: 'exact' })
     .in('id', eligibleIds)
     .eq('gender', gender)
     .eq('parents_content', parentsContent)
     .eq('is_active', true)
-    .order('name');
+    .order('name')
+    .range(offset, offset + limit - 1);
 
   if (themesError) {
     return NextResponse.json({ error: 'Gagal memuat tema.' }, { status: 500 });
   }
+  const total = count || 0;
   if (!themes || themes.length === 0) {
-    return NextResponse.json({ themes: [] });
+    return NextResponse.json({
+      themes: [],
+      pagination: {
+        total,
+        limit,
+        offset,
+        has_previous: offset > 0,
+        has_next: offset + limit < total,
+      },
+    });
   }
 
   const themeIds = themes.map((theme) => theme.id);
@@ -105,5 +136,12 @@ export async function GET(req: NextRequest) {
             : [],
       };
     }),
+    pagination: {
+      total,
+      limit,
+      offset,
+      has_previous: offset > 0,
+      has_next: offset + limit < total,
+    },
   });
 }

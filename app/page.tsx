@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useEffect, useMemo, useCallback } 
 import ValidatedInput from '@/components/ValidatedInput';
 import ThemeSlideshow from '@/components/ThemeSlideshow';
 import CharacterPreview from '@/components/CharacterPreview';
-import { fetchCustomerStyleOptions, fetchEligibleThemes, type Theme } from '@/lib/themes';
+import { fetchCustomerStyleOptions, fetchEligibleThemes, type Theme, type ThemePagination } from '@/lib/themes';
 import {
   HAIR_CODES,
   EYE_CODES,
@@ -105,6 +105,15 @@ const INITIAL_STATE: OrderState = {
 };
 
 const TOTAL_STEPS = 8;
+const THEME_PAGE_SIZE = 4;
+
+const EMPTY_THEME_PAGINATION: ThemePagination = {
+  total: 0,
+  limit: THEME_PAGE_SIZE,
+  offset: 0,
+  has_previous: false,
+  has_next: false,
+};
 
 const LocaleContext = createContext<Locale>('id');
 
@@ -168,6 +177,8 @@ export default function CustomerPage() {
 
   // Theme state
   const [themes, setThemes] = useState<Theme[]>([]);
+  const [themeOffset, setThemeOffset] = useState(0);
+  const [themePagination, setThemePagination] = useState<ThemePagination>(EMPTY_THEME_PAGINATION);
   const [loadingThemes, setLoadingThemes] = useState(false);
   const [visibleHairCodes, setVisibleHairCodes] = useState<string[]>(HAIR_CODES);
   const [visibleEyeCodes, setVisibleEyeCodes] = useState<string[]>(EYE_CODES);
@@ -311,6 +322,12 @@ export default function CustomerPage() {
   // STEP 6 — Fetch themes when entering step 6
   // ==========================================================================
   useEffect(() => {
+    setThemeOffset(0);
+    setThemes([]);
+    setThemePagination(EMPTY_THEME_PAGINATION);
+  }, [s.character_gender, s.parents_content, s.package_code]);
+
+  useEffect(() => {
     if (s.step !== 6) return;
     if (!s.package_code || !s.parents_content || !s.character_gender) return;
     let active = true;
@@ -319,13 +336,19 @@ export default function CustomerPage() {
       gender: s.character_gender,
       parents_content: s.parents_content as ParentsContent,
       package_code: s.package_code as PackageCode,
+      limit: THEME_PAGE_SIZE,
+      offset: themeOffset,
     })
-      .then((data) => {
-        if (active) setThemes(data);
+      .then((page) => {
+        if (!active) return;
+        setThemes(page.themes);
+        setThemePagination(page.pagination);
       })
       .catch((e) => {
         console.error('fetchEligibleThemes', e);
-        if (active) setThemes([]);
+        if (!active) return;
+        setThemes([]);
+        setThemePagination(EMPTY_THEME_PAGINATION);
       })
       .finally(() => {
         if (active) setLoadingThemes(false);
@@ -333,7 +356,15 @@ export default function CustomerPage() {
     return () => {
       active = false;
     };
-  }, [s.step, s.character_gender, s.parents_content, s.package_code]);
+  }, [s.step, s.character_gender, s.parents_content, s.package_code, themeOffset]);
+
+  const handlePreviousThemePage = useCallback(() => {
+    setThemeOffset((current) => Math.max(0, current - THEME_PAGE_SIZE));
+  }, []);
+
+  const handleNextThemePage = useCallback(() => {
+    setThemeOffset((current) => current + THEME_PAGE_SIZE);
+  }, []);
 
   // ==========================================================================
   // STEP 6 — Theme select handler
@@ -618,8 +649,11 @@ export default function CustomerPage() {
           <Step6
             themes={themes}
             loading={loadingThemes}
+            pagination={themePagination}
             selectedCode={s.theme_code}
             onSelect={handleThemeSelect}
+            onPreviousPage={handlePreviousThemePage}
+            onNextPage={handleNextThemePage}
           />
         )}
 
@@ -1173,10 +1207,23 @@ function Step5(props: { value: string; onChange: (v: ParentsContent) => void }) 
 function Step6(props: {
   themes: Theme[];
   loading: boolean;
+  pagination: ThemePagination;
   selectedCode: string;
   onSelect: (t: Theme) => void;
+  onPreviousPage: () => void;
+  onNextPage: () => void;
 }) {
   const { copy } = useLocaleCopy();
+  const totalPages = Math.max(1, Math.ceil(props.pagination.total / props.pagination.limit));
+  const currentPage = Math.min(
+    totalPages,
+    Math.floor(props.pagination.offset / props.pagination.limit) + 1
+  );
+  const showPager =
+    !props.loading &&
+    props.pagination.total > props.pagination.limit &&
+    (props.pagination.has_previous || props.pagination.has_next);
+
   return (
     <div>
       <p className="font-display italic text-accent-deep text-[13px] font-medium mb-1">{copy.step} 6</p>
@@ -1205,29 +1252,59 @@ function Step6(props: {
           <div className="text-[12px] mt-2">{copy.changePrevious}</div>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3">
-          {props.themes.map((t) => (
-            <div key={t.id}>
-              <ThemeSlideshow
-                images={t.images}
-                themeName={t.name}
-                isSelected={props.selectedCode === t.theme_code}
-                onClick={() => props.onSelect(t)}
-                selectedLabel={copy.selected}
-                noImageLabel={copy.noImage}
-                previewLabel={copy.previewHold}
-              />
-              <div className="px-1 mt-2">
-                <h4 className="font-display text-[14px] font-semibold leading-tight m-0">
-                  {t.name}
-                </h4>
-                <div className="font-mono text-[10px] text-ink-faint tracking-wider mt-0.5">
-                  {t.theme_code}
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            {props.themes.map((t) => (
+              <div key={t.id}>
+                <ThemeSlideshow
+                  images={t.images}
+                  themeName={t.name}
+                  isSelected={props.selectedCode === t.theme_code}
+                  onClick={() => props.onSelect(t)}
+                  selectedLabel={copy.selected}
+                  noImageLabel={copy.noImage}
+                  previewLabel={copy.previewHold}
+                />
+                <div className="px-1 mt-2">
+                  <h4 className="font-display text-[14px] font-semibold leading-tight m-0">
+                    {t.name}
+                  </h4>
+                  <div className="font-mono text-[10px] text-ink-faint tracking-wider mt-0.5">
+                    {t.theme_code}
+                  </div>
                 </div>
               </div>
+            ))}
+          </div>
+
+          {showPager && (
+            <div className="mt-5 flex items-center gap-3">
+              {props.pagination.has_previous && (
+                <button
+                  type="button"
+                  onClick={props.onPreviousPage}
+                  className="min-h-[44px] rounded-[12px] border-2 border-line px-4 text-[13px] font-semibold text-ink hover:border-accent hover:bg-accent-soft transition-colors"
+                >
+                  {copy.previousThemePage}
+                </button>
+              )}
+
+              <div className="flex-1 text-center text-[12px] text-ink-soft">
+                {copy.themePageStatus} {currentPage} / {totalPages}
+              </div>
+
+              {props.pagination.has_next && (
+                <button
+                  type="button"
+                  onClick={props.onNextPage}
+                  className="min-h-[44px] rounded-[12px] border-2 border-accent bg-accent text-white px-4 text-[13px] font-semibold hover:bg-accent-deep transition-colors"
+                >
+                  {copy.nextThemePage}
+                </button>
+              )}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   );

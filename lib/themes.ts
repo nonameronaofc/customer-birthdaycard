@@ -21,6 +21,19 @@ export type Theme = {
   images: ThemeImage[];
 };
 
+export type ThemePagination = {
+  total: number;
+  limit: number;
+  offset: number;
+  has_previous: boolean;
+  has_next: boolean;
+};
+
+export type ThemePage = {
+  themes: Theme[];
+  pagination: ThemePagination;
+};
+
 // Fetch tema yang lolos 4 filter sesuai sync spec §13:
 // - is_active = true
 // - gender match
@@ -30,16 +43,29 @@ export async function fetchEligibleThemes(opts: {
   gender: Gender;
   parents_content: ParentsContent;
   package_code: PackageCode;
-}): Promise<Theme[]> {
+  limit?: number;
+  offset?: number;
+}): Promise<ThemePage> {
   const params = new URLSearchParams({
     gender: opts.gender,
     parents_content: opts.parents_content,
     package_code: opts.package_code,
   });
+  if (typeof opts.limit === 'number') params.set('limit', String(opts.limit));
+  if (typeof opts.offset === 'number') params.set('offset', String(opts.offset));
   const res = await fetch(`/api/customer/themes?${params.toString()}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Gagal memuat tema.');
-  return data.themes || [];
+  return {
+    themes: data.themes || [],
+    pagination: data.pagination || {
+      total: Array.isArray(data.themes) ? data.themes.length : 0,
+      limit: opts.limit || 4,
+      offset: opts.offset || 0,
+      has_previous: (opts.offset || 0) > 0,
+      has_next: false,
+    },
+  };
 }
 
 // Untuk preview asset character — pakai admin asset API yg dishare via storage bucket

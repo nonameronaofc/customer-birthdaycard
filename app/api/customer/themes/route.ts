@@ -73,10 +73,26 @@ export async function GET(req: NextRequest) {
     .order('name')
     .range(offset, offset + limit - 1);
 
+  const total = count || 0;
   if (themesError) {
+    const rangeError = themesError as { code?: string; message?: string };
+    if (
+      rangeError.code === 'PGRST103' ||
+      rangeError.message?.toLowerCase().includes('range')
+    ) {
+      return NextResponse.json({
+        themes: [],
+        pagination: {
+          total,
+          limit,
+          offset,
+          has_previous: offset > 0,
+          has_next: false,
+        },
+      });
+    }
     return NextResponse.json({ error: 'Gagal memuat tema.' }, { status: 500 });
   }
-  const total = count || 0;
   if (!themes || themes.length === 0) {
     return NextResponse.json({
       themes: [],

@@ -106,6 +106,8 @@ const INITIAL_STATE: OrderState = {
 
 const TOTAL_STEPS = 8;
 const THEME_PAGE_SIZE = 4;
+const DRAFT_STORAGE_KEY = 'birthday-customer-order-draft-v1';
+const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const EMPTY_THEME_PAGINATION: ThemePagination = {
   total: 0,
@@ -113,6 +115,11 @@ const EMPTY_THEME_PAGINATION: ThemePagination = {
   offset: 0,
   has_previous: false,
   has_next: false,
+};
+
+type OrderDraft = {
+  saved_at: number;
+  state: OrderState;
 };
 
 const LocaleContext = createContext<Locale>('id');
@@ -161,6 +168,75 @@ function sweetnameUsageMessage(required: boolean, locale: Locale): string {
   return locale === 'en' ? 'The sweetname in this theme will ONLY appear in the VIDEO.' : 'Sweetname dalam tema ini HANYA ditampilkan pada VIDEO.';
 }
 
+function hasMeaningfulDraft(state: OrderState) {
+  return (
+    state.step > 1 ||
+    !!state.order_code ||
+    !!state.customer_name ||
+    !!state.whatsapp_number ||
+    !!state.email ||
+    !!state.child_nickname ||
+    !!state.child_full_name ||
+    !!state.birthday_number ||
+    !!state.parents_content ||
+    !!state.theme_code
+  );
+}
+
+function readOrderDraft(): OrderState | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+    if (!raw) return null;
+
+    const draft = JSON.parse(raw) as Partial<OrderDraft>;
+    if (!draft.saved_at || !draft.state) {
+      window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+      return null;
+    }
+
+    if (Date.now() - draft.saved_at > DRAFT_MAX_AGE_MS) {
+      window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+      return null;
+    }
+
+    return {
+      ...INITIAL_STATE,
+      ...draft.state,
+      step: Math.min(Math.max(Number(draft.state.step) || 1, 1), 7),
+      attempts: 0,
+    };
+  } catch {
+    window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+    return null;
+  }
+}
+
+function writeOrderDraft(state: OrderState) {
+  if (typeof window === 'undefined') return;
+
+  if (!hasMeaningfulDraft(state) || state.step >= 8) {
+    window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+    return;
+  }
+
+  const draft: OrderDraft = {
+    saved_at: Date.now(),
+    state: {
+      ...state,
+      attempts: 0,
+    },
+  };
+
+  window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+}
+
+function clearOrderDraft() {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+}
+
 // ============================================================================
 // MAIN PAGE
 // ============================================================================
@@ -174,6 +250,7 @@ export default function CustomerPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [orderId, setOrderId] = useState('');
+  const [draftReady, setDraftReady] = useState(false);
 
   // Theme state
   const [themes, setThemes] = useState<Theme[]>([]);
@@ -201,6 +278,17 @@ export default function CustomerPage() {
   );
 
   const copy = UI_COPY[locale];
+
+  useEffect(() => {
+    const draft = readOrderDraft();
+    if (draft) setS(draft);
+    setDraftReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!draftReady) return;
+    writeOrderDraft(s);
+  }, [draftReady, s]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(LOCALE_STORAGE_KEY);
@@ -474,6 +562,7 @@ export default function CustomerPage() {
         setSubmitError(locale === 'en' ? copy.submitFailed : (data.error || copy.submitFailed));
         return;
       }
+      clearOrderDraft();
       setOrderId(data.public_order_id);
       update('step', 8);
     } catch (e) {

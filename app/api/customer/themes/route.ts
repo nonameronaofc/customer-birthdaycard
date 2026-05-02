@@ -14,7 +14,7 @@ export const runtime = 'nodejs';
 const DEFAULT_LIMIT = 4;
 const MAX_LIMIT = 12;
 const CACHE_HEADERS = {
-  'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=86400',
+  'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
 };
 
 function readPageParam(value: string | null, fallback: number) {

@@ -5,7 +5,7 @@ import { GENDERS, HAIR_REGEX, EYE_REGEX, type Gender } from '@/lib/constants';
 export const runtime = 'nodejs';
 
 const CACHE_HEADERS = {
-  'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
+  'Cache-Control': 'public, s-maxage=7200, stale-while-revalidate=86400',
 };
 
 export async function GET(req: NextRequest) {

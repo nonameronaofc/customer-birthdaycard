@@ -4,6 +4,10 @@ import { GENDERS, HAIR_REGEX, EYE_REGEX, type Gender } from '@/lib/constants';
 
 export const runtime = 'nodejs';
 
+const CACHE_HEADERS = {
+  'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=86400',
+};
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const gender = searchParams.get('gender') as Gender | null;
@@ -34,5 +38,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Gagal memuat character asset.' }, { status: 500 });
   }
 
-  return NextResponse.json({ image_url: data?.image_url || null });
+  return NextResponse.json(
+    { image_url: data?.image_url || null },
+    { headers: CACHE_HEADERS }
+  );
 }

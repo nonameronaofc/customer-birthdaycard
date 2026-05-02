@@ -13,10 +13,17 @@ export const runtime = 'nodejs';
 
 const DEFAULT_LIMIT = 4;
 const MAX_LIMIT = 12;
+const CACHE_HEADERS = {
+  'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=86400',
+};
 
 function readPageParam(value: string | null, fallback: number) {
   const parsed = Number.parseInt(value || '', 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function cachedJson(body: unknown) {
+  return NextResponse.json(body, { headers: CACHE_HEADERS });
 }
 
 export async function GET(req: NextRequest) {
@@ -51,7 +58,7 @@ export async function GET(req: NextRequest) {
 
   const eligibleIds = (packageRows || []).map((row) => row.theme_id);
   if (eligibleIds.length === 0) {
-    return NextResponse.json({
+    return cachedJson({
       themes: [],
       pagination: {
         total: 0,
@@ -80,7 +87,7 @@ export async function GET(req: NextRequest) {
       rangeError.code === 'PGRST103' ||
       rangeError.message?.toLowerCase().includes('range')
     ) {
-      return NextResponse.json({
+      return cachedJson({
         themes: [],
         pagination: {
           total,
@@ -94,7 +101,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Gagal memuat tema.' }, { status: 500 });
   }
   if (!themes || themes.length === 0) {
-    return NextResponse.json({
+    return cachedJson({
       themes: [],
       pagination: {
         total,
@@ -128,7 +135,7 @@ export async function GET(req: NextRequest) {
     imagesByTheme.set(image.theme_id, [...existing, row]);
   });
 
-  return NextResponse.json({
+  return cachedJson({
     themes: themes.map((theme) => {
       const themeImages = (imagesByTheme.get(theme.id) || []).slice(0, 3);
       return {

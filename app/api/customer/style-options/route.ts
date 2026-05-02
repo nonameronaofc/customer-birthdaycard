@@ -5,6 +5,10 @@ import { EYE_CODES, HAIR_CODES } from '@/lib/constants';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const CACHE_HEADERS = {
+  'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=86400',
+};
+
 function fallbackOptions() {
   return {
     hair_codes: HAIR_CODES,
@@ -21,7 +25,7 @@ export async function GET() {
     .order('sort_order');
 
   if (error) {
-    return NextResponse.json(fallbackOptions());
+    return NextResponse.json(fallbackOptions(), { headers: CACHE_HEADERS });
   }
 
   const hairCodes = (data ?? [])
@@ -33,8 +37,11 @@ export async function GET() {
     .map((row) => row.option_code)
     .filter((code) => EYE_CODES.includes(code));
 
-  return NextResponse.json({
-    hair_codes: hairCodes.length > 0 ? hairCodes : HAIR_CODES,
-    eyeglasses_codes: eyeglassesCodes.length > 0 ? eyeglassesCodes : EYE_CODES,
-  });
+  return NextResponse.json(
+    {
+      hair_codes: hairCodes.length > 0 ? hairCodes : HAIR_CODES,
+      eyeglasses_codes: eyeglassesCodes.length > 0 ? eyeglassesCodes : EYE_CODES,
+    },
+    { headers: CACHE_HEADERS }
+  );
 }

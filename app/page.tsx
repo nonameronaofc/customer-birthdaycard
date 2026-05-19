@@ -181,22 +181,47 @@ function needsParentNickname(theme: Theme): boolean {
 
 function nicknameUsageText(theme: Theme, locale: Locale): string {
   const usage = getNicknameUsage(theme);
-  if (usage === 'video') return locale === 'en' ? 'Used in the video.' : 'Dipakai di video.';
-  if (usage === 'print') return locale === 'en' ? 'Used in the print-ready file.' : 'Dipakai di file siap cetak.';
-  if (usage === 'both') return locale === 'en' ? 'Used in the video and print-ready file.' : 'Dipakai di video dan file siap cetak.';
+  if (usage !== 'none') return locale === 'en' ? 'Appears as an attribute in the video.' : 'Tampil sebagai atribut dalam video.';
   return '';
 }
 
 function nicknameUsageMessage(usage: 'none' | 'video' | 'print' | 'both', locale: Locale): string {
-  if (usage === 'both') return locale === 'en' ? 'The nickname in this theme will appear in the VIDEO and print-ready file.' : 'Nickname dalam tema ini akan ditampilkan pada VIDEO dan file siap cetak.';
-  if (usage === 'print') return locale === 'en' ? 'The nickname in this theme will ONLY appear in the print-ready file.' : 'Nickname dalam tema ini HANYA ditampilkan pada file siap cetak.';
-  if (usage === 'video') return locale === 'en' ? 'The nickname in this theme will ONLY appear in the VIDEO.' : 'Nickname dalam tema ini HANYA ditampilkan pada VIDEO.';
+  if (usage !== 'none') return locale === 'en' ? 'Parent nickname will appear as an attribute in the video.' : 'Nickname orang tua akan tampil sebagai atribut dalam video.';
   return '';
 }
 
 function sweetnameUsageMessage(required: boolean, locale: Locale): string {
   if (!required) return '';
-  return locale === 'en' ? 'The sweetname in this theme will ONLY appear in the VIDEO.' : 'Sweetname dalam tema ini HANYA ditampilkan pada VIDEO.';
+  return locale === 'en' ? 'Parent sweetname will appear as an attribute in the video.' : 'Sweetname orang tua akan tampil sebagai atribut dalam video.';
+}
+
+function pickThemeDefaultVariant(theme: Theme): ThemeCharacterVariant | null {
+  return theme.character_variants.find((variant) => variant.is_default) || null;
+}
+
+function parentInputsReady(theme: Theme | undefined, state: OrderState, locale: Locale): boolean {
+  if (!theme) return false;
+  const parentsContent = state.parents_content;
+
+  if (needsParentNickname(theme)) {
+    if ((parentsContent === 'single_mom' || parentsContent === 'mom_and_dad') && !validateParentNickname(state.mom_nickname, 'mom', locale).ok) {
+      return false;
+    }
+    if ((parentsContent === 'single_father' || parentsContent === 'mom_and_dad') && !validateParentNickname(state.dad_nickname, 'dad', locale).ok) {
+      return false;
+    }
+  }
+
+  if (theme.requires_parents_sweetname) {
+    if ((parentsContent === 'single_mom' || parentsContent === 'mom_and_dad') && !validateParentSweetname(state.mom_sweetname, 'mom', locale).ok) {
+      return false;
+    }
+    if ((parentsContent === 'single_father' || parentsContent === 'mom_and_dad') && !validateParentSweetname(state.dad_sweetname, 'dad', locale).ok) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function hasMeaningfulDraft(state: OrderState) {
@@ -512,6 +537,7 @@ export default function CustomerPage() {
   // ==========================================================================
   const handleThemeSelect = (theme: Theme) => {
     const nicknameUsage = getNicknameUsage(theme);
+    const defaultVariant = pickThemeDefaultVariant(theme);
     setS((prev) => ({
       ...prev,
       theme_code: theme.theme_code,
@@ -519,13 +545,13 @@ export default function CustomerPage() {
       theme_image: theme.images[0]?.image_url || theme.image_url,
       theme_nickname_usage: nicknameUsage,
       theme_requires_parents_sweetname: !!theme.requires_parents_sweetname,
-      selected_character_variant_id: '',
-      character_variant_name: '',
-      character_variant_image: '',
-      character_hair_type_key: '',
-      character_hair_type: '',
-      character_face_attribute_key: '',
-      character_face_attribute: '',
+      selected_character_variant_id: defaultVariant?.id || '',
+      character_variant_name: defaultVariant?.variant_name || '',
+      character_variant_image: defaultVariant?.image_url || '',
+      character_hair_type_key: defaultVariant?.hair_type_key || '',
+      character_hair_type: defaultVariant?.hair_type_label || '',
+      character_face_attribute_key: defaultVariant?.face_attribute_key || '',
+      character_face_attribute: defaultVariant?.face_attribute_label || '',
       step: 6,
     }));
     return;
@@ -759,7 +785,8 @@ export default function CustomerPage() {
           !pendingTheme &&
           !!selectedTheme &&
           selectedTheme.character_variants.length > 0 &&
-          !!s.selected_character_variant_id
+          !!s.selected_character_variant_id &&
+          parentInputsReady(selectedTheme, s, locale)
         );
       case 7:
         return !submitting && !!turnstileSiteKey && !!captchaToken;
@@ -1952,9 +1979,9 @@ function Step6({
               value={state.mom_sweetname}
               onChange={(value) => onChange('mom_sweetname', value)}
               validator={(value) => validateParentSweetname(value, 'mom', locale)}
-              maxLength={16}
+              maxLength={7}
               showCounter
-              helperText={copy.max16OneSpace}
+              helperText={copy.max7NoSpace}
               exampleLabel={copy.example}
             />
           )}
@@ -1965,9 +1992,9 @@ function Step6({
               value={state.dad_sweetname}
               onChange={(value) => onChange('dad_sweetname', value)}
               validator={(value) => validateParentSweetname(value, 'dad', locale)}
-              maxLength={16}
+              maxLength={7}
               showCounter
-              helperText={copy.max16OneSpace}
+              helperText={copy.max7NoSpace}
               exampleLabel={copy.example}
             />
           )}
@@ -1986,25 +2013,52 @@ function ThemeDetailPreview({
   fallback: string;
   name: string;
 }) {
+  const { locale } = useLocaleCopy();
   const [index, setIndex] = useState(0);
-  const previewImages = (images.length > 0 ? images : fallback ? [{ image_url: fallback }] : []).slice(0, 5);
+  const previewImages = images.length > 0 ? images : fallback ? [{ image_url: fallback }] : [];
 
   useEffect(() => {
-    if (previewImages.length <= 1) return;
-    const timer = window.setInterval(() => {
-      setIndex((value) => (value + 1) % previewImages.length);
-    }, 2600);
-    return () => window.clearInterval(timer);
+    setIndex(0);
   }, [previewImages.length]);
+
+  const goToPrevious = () => {
+    if (previewImages.length <= 1) return;
+    setIndex((value) => (value - 1 + previewImages.length) % previewImages.length);
+  };
+
+  const goToNext = () => {
+    if (previewImages.length <= 1) return;
+    setIndex((value) => (value + 1) % previewImages.length);
+  };
 
   return (
     <div className="overflow-hidden rounded-[16px] border-[1.5px] border-line-soft bg-accent-soft">
-      <div className="aspect-[9/16] w-full">
+      <div className="relative aspect-[9/16] w-full">
         {previewImages[index]?.image_url ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={previewImages[index].image_url} alt={name} className="h-full w-full object-contain" />
         ) : (
           <div className="flex h-full items-center justify-center text-[13px] text-ink-faint">No image</div>
+        )}
+        {previewImages.length > 1 && (
+          <>
+            <button
+              type="button"
+              onClick={goToPrevious}
+              className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-paper/90 text-[20px] font-semibold text-ink shadow-sm"
+              aria-label={locale === 'en' ? 'Previous theme image' : 'Foto tema sebelumnya'}
+            >
+              {'<'}
+            </button>
+            <button
+              type="button"
+              onClick={goToNext}
+              className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-paper/90 text-[20px] font-semibold text-ink shadow-sm"
+              aria-label={locale === 'en' ? 'Next theme image' : 'Foto tema berikutnya'}
+            >
+              {'>'}
+            </button>
+          </>
         )}
       </div>
       {previewImages.length > 1 && (

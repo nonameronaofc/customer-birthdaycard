@@ -182,7 +182,7 @@ export async function GET(req: NextRequest) {
 
   return cachedJson({
     themes: themes.map((theme) => {
-      const themeImages = (imagesByTheme.get(theme.id) || []).slice(0, 3);
+      const themeImages = imagesByTheme.get(theme.id) || [];
       return {
         id: theme.id,
         theme_code: theme.theme_code,

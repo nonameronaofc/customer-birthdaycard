@@ -3,20 +3,17 @@
 import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ValidatedInput from '@/components/ValidatedInput';
 import ThemeSlideshow from '@/components/ThemeSlideshow';
-import CharacterPreview from '@/components/CharacterPreview';
 import { fetchCustomerStyleOptions, fetchEligibleThemes, type Theme, type ThemeCharacterVariant, type ThemePagination } from '@/lib/themes';
 import {
   HAIR_CODES,
   EYE_CODES,
   DEFAULT_HAIR,
   DEFAULT_EYE,
-  buildAssetCode,
   type Gender,
   type ParentsContent,
   type PackageCode,
 } from '@/lib/constants';
 import {
-  validateOrderCode,
   validateEntryCode,
   validateCustomerName,
   validateWhatsapp,
@@ -96,7 +93,9 @@ type OrderState = {
   selected_character_variant_id: string;
   character_variant_name: string;
   character_variant_image: string;
+  character_hair_type_key: string;
   character_hair_type: string;
+  character_face_attribute_key: string;
   character_face_attribute: string;
 };
 
@@ -130,7 +129,9 @@ const INITIAL_STATE: OrderState = {
   selected_character_variant_id: '',
   character_variant_name: '',
   character_variant_image: '',
+  character_hair_type_key: '',
   character_hair_type: '',
+  character_face_attribute_key: '',
   character_face_attribute: '',
 };
 
@@ -231,12 +232,18 @@ function readOrderDraft(): OrderState | null {
       return null;
     }
 
-    return {
+    const restored = {
       ...INITIAL_STATE,
       ...draft.state,
       step: Math.min(Math.max(Number(draft.state.step) || 1, 1), 7),
       attempts: 0,
     };
+
+    if (restored.step >= 7 && !restored.selected_character_variant_id) {
+      restored.step = restored.theme_code ? 6 : 4;
+    }
+
+    return restored;
   } catch {
     window.localStorage.removeItem(DRAFT_STORAGE_KEY);
     return null;
@@ -265,15 +272,6 @@ function writeOrderDraft(state: OrderState) {
 function clearOrderDraft() {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem(DRAFT_STORAGE_KEY);
-}
-
-function pickDefaultVariant(theme: Theme | undefined): ThemeCharacterVariant | null {
-  if (!theme || theme.character_variants.length === 0) return null;
-  return (
-    theme.character_variants.find((variant) => variant.is_default) ||
-    theme.character_variants.find((variant) => variant.is_recommended) ||
-    theme.character_variants[0]
-  );
 }
 
 // ============================================================================
@@ -391,7 +389,7 @@ export default function CustomerPage() {
   // ==========================================================================
   const handleValidateCode = async () => {
     const code = s.order_code.toUpperCase().trim();
-    const local = validateOrderCode(code, locale);
+    const local = validateEntryCode(code, locale);
     if (!local.ok) {
       setOrderCodeError(local);
       return;
@@ -514,7 +512,6 @@ export default function CustomerPage() {
   // ==========================================================================
   const handleThemeSelect = (theme: Theme) => {
     const nicknameUsage = getNicknameUsage(theme);
-    const defaultVariant = pickDefaultVariant(theme);
     setS((prev) => ({
       ...prev,
       theme_code: theme.theme_code,
@@ -522,26 +519,65 @@ export default function CustomerPage() {
       theme_image: theme.images[0]?.image_url || theme.image_url,
       theme_nickname_usage: nicknameUsage,
       theme_requires_parents_sweetname: !!theme.requires_parents_sweetname,
-      selected_character_variant_id: defaultVariant?.id || '',
-      character_variant_name: defaultVariant?.variant_name || '',
-      character_variant_image: defaultVariant?.image_url || '',
-      character_hair_type: defaultVariant?.hair_type_label || '',
-      character_face_attribute: defaultVariant?.face_attribute_label || '',
+      selected_character_variant_id: '',
+      character_variant_name: '',
+      character_variant_image: '',
+      character_hair_type_key: '',
+      character_hair_type: '',
+      character_face_attribute_key: '',
+      character_face_attribute: '',
       step: 6,
     }));
     return;
     // Logika modal sesuai sync spec — independen
   };
 
-  const handleVariantSelect = (variant: ThemeCharacterVariant) => {
-    setS((prev) => ({
-      ...prev,
-      selected_character_variant_id: variant.id,
-      character_variant_name: variant.variant_name || '',
-      character_variant_image: variant.image_url,
-      character_hair_type: variant.hair_type_label,
-      character_face_attribute: variant.face_attribute_label,
-    }));
+  const handleHairOptionSelect = (option: ThemeCharacterVariant) => {
+    setS((prev) => {
+      const currentTheme = themes.find((theme) => theme.theme_code === prev.theme_code);
+      const variants = currentTheme?.character_variants || [];
+      const match = variants.find(
+        (variant) =>
+          variant.hair_type_key === option.hair_type_key &&
+          variant.face_attribute_key === prev.character_face_attribute_key
+      );
+
+      return {
+        ...prev,
+        character_hair_type_key: option.hair_type_key,
+        character_hair_type: option.hair_type_label,
+        character_face_attribute_key: match ? prev.character_face_attribute_key : '',
+        character_face_attribute: match ? match.face_attribute_label : '',
+        selected_character_variant_id: match?.id || '',
+        character_variant_name: match?.variant_name || '',
+        character_variant_image: match?.image_url || '',
+      };
+    });
+  };
+
+  const handleFaceOptionSelect = (option: ThemeCharacterVariant) => {
+    setS((prev) => {
+      const currentTheme = themes.find((theme) => theme.theme_code === prev.theme_code);
+      const variants = currentTheme?.character_variants || [];
+      const hairKey = prev.character_hair_type_key || option.hair_type_key;
+      const hairLabel = prev.character_hair_type || option.hair_type_label;
+      const match = variants.find(
+        (variant) =>
+          variant.hair_type_key === hairKey &&
+          variant.face_attribute_key === option.face_attribute_key
+      );
+
+      return {
+        ...prev,
+        character_hair_type_key: hairKey,
+        character_hair_type: hairLabel,
+        character_face_attribute_key: option.face_attribute_key,
+        character_face_attribute: option.face_attribute_label,
+        selected_character_variant_id: match?.id || '',
+        character_variant_name: match?.variant_name || '',
+        character_variant_image: match?.image_url || '',
+      };
+    });
   };
 
   const handleParentsFilterChange = (value: ParentsContent) => {
@@ -556,7 +592,9 @@ export default function CustomerPage() {
       selected_character_variant_id: '',
       character_variant_name: '',
       character_variant_image: '',
+      character_hair_type_key: '',
       character_hair_type: '',
+      character_face_attribute_key: '',
       character_face_attribute: '',
     }));
   };
@@ -573,7 +611,9 @@ export default function CustomerPage() {
       selected_character_variant_id: '',
       character_variant_name: '',
       character_variant_image: '',
+      character_hair_type_key: '',
       character_hair_type: '',
+      character_face_attribute_key: '',
       character_face_attribute: '',
     }));
   };
@@ -664,13 +704,7 @@ export default function CustomerPage() {
         character_variant_image: s.character_variant_image || null,
         character_hair_type: s.character_hair_type || null,
         character_face_attribute: s.character_face_attribute || null,
-        special_notes: [
-          s.selected_character_variant_id ? `Character variant ID: ${s.selected_character_variant_id}` : '',
-          s.character_variant_name ? `Variant: ${s.character_variant_name}` : '',
-          s.character_hair_type ? `Hair Type: ${s.character_hair_type}` : '',
-          s.character_face_attribute ? `Face Attribute: ${s.character_face_attribute}` : '',
-          s.character_variant_image ? `Character Image: ${s.character_variant_image}` : '',
-        ].filter(Boolean).join('\n') || null,
+        special_notes: null,
         captcha_token: captchaToken,
         preferred_language: locale,
       };
@@ -723,11 +757,9 @@ export default function CustomerPage() {
         return (
           !!s.theme_code &&
           !pendingTheme &&
-          (
-            !selectedTheme ||
-            selectedTheme.character_variants.length === 0 ||
-            !!s.selected_character_variant_id
-          )
+          !!selectedTheme &&
+          selectedTheme.character_variants.length > 0 &&
+          !!s.selected_character_variant_id
         );
       case 7:
         return !submitting && !!turnstileSiteKey && !!captchaToken;
@@ -874,7 +906,8 @@ export default function CustomerPage() {
             theme={selectedTheme}
             state={s}
             onChange={update}
-            onVariantSelect={handleVariantSelect}
+            onHairSelect={handleHairOptionSelect}
+            onFaceSelect={handleFaceOptionSelect}
           />
         )}
 
@@ -1757,22 +1790,34 @@ function Step6({
   theme,
   state,
   onChange,
-  onVariantSelect,
+  onHairSelect,
+  onFaceSelect,
 }: {
   theme: Theme | undefined;
   state: OrderState;
   onChange: (key: any, val: any) => void;
-  onVariantSelect: (variant: ThemeCharacterVariant) => void;
+  onHairSelect: (variant: ThemeCharacterVariant) => void;
+  onFaceSelect: (variant: ThemeCharacterVariant) => void;
 }) {
   const { locale, copy } = useLocaleCopy();
   const variants = theme?.character_variants || [];
-  const selectedVariant = variants.find((variant) => variant.id === state.selected_character_variant_id) || variants[0];
+  const selectedVariant = variants.find((variant) => variant.id === state.selected_character_variant_id) || null;
+  const selectedHairKey = state.character_hair_type_key || selectedVariant?.hair_type_key || '';
+  const selectedFaceKey = state.character_face_attribute_key || selectedVariant?.face_attribute_key || '';
   const showMomNick = !!theme && needsParentNickname(theme) && (state.parents_content === 'single_mom' || state.parents_content === 'mom_and_dad');
   const showDadNick = !!theme && needsParentNickname(theme) && (state.parents_content === 'single_father' || state.parents_content === 'mom_and_dad');
   const showMomSweet = !!theme?.requires_parents_sweetname && (state.parents_content === 'single_mom' || state.parents_content === 'mom_and_dad');
   const showDadSweet = !!theme?.requires_parents_sweetname && (state.parents_content === 'single_father' || state.parents_content === 'mom_and_dad');
   const hairOptions = Array.from(new Map(variants.map((variant) => [variant.hair_type_key, variant])).values());
-  const faceOptions = Array.from(new Map(variants.map((variant) => [variant.face_attribute_key, variant])).values());
+  const faceOptions = selectedHairKey
+    ? Array.from(
+        new Map(
+          variants
+            .filter((variant) => variant.hair_type_key === selectedHairKey)
+            .map((variant) => [variant.face_attribute_key, variant])
+        ).values()
+      )
+    : [];
   const nicknameMessage = theme ? nicknameUsageMessage(getNicknameUsage(theme), locale) : '';
   const sweetnameMessage = theme ? sweetnameUsageMessage(!!theme.requires_parents_sweetname, locale) : '';
 
@@ -1820,14 +1865,22 @@ function Step6({
           <>
             <div className="mb-4 flex justify-center rounded-[16px] border-[1.5px] border-line-soft bg-bg-alt px-3 py-4">
               <div className="w-56">
-                <div className="mx-auto h-64 w-56 animate-float-char overflow-hidden rounded-[14px] bg-paper">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={selectedVariant.image_url}
-                    alt={selectedVariant.variant_name || theme.name}
-                    className="h-full w-full object-contain"
-                  />
-                </div>
+                {selectedVariant ? (
+                  <div className="mx-auto h-64 w-56 animate-float-char overflow-hidden rounded-[14px] bg-paper">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={selectedVariant.image_url}
+                      alt={selectedVariant.variant_name || theme.name}
+                      className="h-full w-full object-contain"
+                    />
+                  </div>
+                ) : (
+                  <div className="mx-auto flex h-64 w-56 items-center justify-center rounded-[14px] border border-dashed border-line bg-paper px-4 text-center text-[12px] leading-relaxed text-ink-soft">
+                    {locale === 'en'
+                      ? 'Choose hair type and face attribute.'
+                      : 'Pilih hair type dan face attribute.'}
+                  </div>
+                )}
                 <div className="mx-auto mt-2 h-3 w-24 animate-shadow-pulse rounded-full bg-black/10" />
               </div>
             </div>
@@ -1835,19 +1888,25 @@ function Step6({
             <VariantChips
               label="Hair Type"
               variants={hairOptions}
-              selectedKey={selectedVariant.hair_type_key}
+              selectedKey={selectedHairKey}
               getKey={(variant) => variant.hair_type_key}
               getLabel={(variant) => variant.hair_type_label}
-              onSelect={onVariantSelect}
+              onSelect={onHairSelect}
             />
-            <VariantChips
-              label="Face Attribute"
-              variants={faceOptions}
-              selectedKey={selectedVariant.face_attribute_key}
-              getKey={(variant) => variant.face_attribute_key}
-              getLabel={(variant) => variant.face_attribute_label}
-              onSelect={onVariantSelect}
-            />
+            {selectedHairKey ? (
+              <VariantChips
+                label="Face Attribute"
+                variants={faceOptions}
+                selectedKey={selectedFaceKey}
+                getKey={(variant) => variant.face_attribute_key}
+                getLabel={(variant) => variant.face_attribute_label}
+                onSelect={onFaceSelect}
+              />
+            ) : (
+              <div className="rounded-[14px] border border-line bg-bg-alt p-3 text-[12px] text-ink-soft">
+                {locale === 'en' ? 'Face options appear after hair type is chosen.' : 'Face attribute muncul setelah hair type dipilih.'}
+              </div>
+            )}
           </>
         )}
       </section>
@@ -2029,7 +2088,6 @@ function Step7({
 }) {
   const { locale, copy } = useLocaleCopy();
   const wa = `${state.country_code}${state.whatsapp_number}`;
-  const assetCode = buildAssetCode(state.character_gender, state.hair_style_code, state.eyeglasses_code);
   const selectedParentsLabel = state.parents_content ? parentsLabel(state.parents_content as ParentsContent, locale) : '—';
   const displayPackageLabel = packageLabel(state.package_code, state.package_label, locale);
 
@@ -2067,7 +2125,7 @@ function Step7({
       </ReviewBlock>
 
       {/* KARAKTER — sekarang dengan preview asset */}
-      <ReviewBlock title={copy.character} onEdit={() => onEdit(4)}>
+      <ReviewBlock title={copy.character} onEdit={() => onEdit(6)}>
         <div className="my-2">
           {state.character_variant_image ? (
             <div className="mx-auto h-64 w-56 animate-float-char overflow-hidden rounded-[14px] bg-bg-alt">
@@ -2075,15 +2133,8 @@ function Step7({
               <img src={state.character_variant_image} alt={state.character_variant_name || copy.character} className="h-full w-full object-contain" />
             </div>
           ) : (
-            <div className="scale-90 origin-top">
-              <CharacterPreview
-                gender={state.character_gender}
-                hair={state.hair_style_code}
-                eye={state.eyeglasses_code}
-                showCaption={false}
-                size="md"
-                locale={locale}
-              />
+            <div className="rounded-[14px] border border-[#f2d48c] bg-[#fff8e8] p-3 text-[13px] text-ink-soft">
+              {locale === 'en' ? 'No character has been selected.' : 'Karakter belum dipilih.'}
             </div>
           )}
         </div>
@@ -2091,7 +2142,6 @@ function Step7({
         {state.character_hair_type && <Row k="Hair Type" v={state.character_hair_type} />}
         {state.character_face_attribute && <Row k="Face Attribute" v={state.character_face_attribute} />}
         {state.character_variant_name && <Row k="Variant" v={state.character_variant_name} />}
-        <Row k={copy.assetCode} v={assetCode} mono />
       </ReviewBlock>
 
       {/* TEMA — preview gambar tema */}

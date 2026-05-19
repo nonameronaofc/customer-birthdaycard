@@ -283,17 +283,19 @@ export async function POST(req: NextRequest) {
     return err('Parents content tema tidak cocok.');
   }
 
-  if (body.selected_character_variant_id) {
-    const { data: variant, error: variantErr } = await supabase
-      .from('theme_character_variants')
-      .select('id, theme_id, gender, is_active')
-      .eq('id', body.selected_character_variant_id)
-      .maybeSingle();
+  if (!body.selected_character_variant_id) {
+    return err('Pilihan karakter dari tema wajib dipilih.');
+  }
 
-    if (variantErr) return err('Gagal memeriksa pilihan karakter.', 500);
-    if (!variant || !variant.is_active || variant.theme_id !== theme.id || variant.gender !== body.character_gender) {
-      return err('Pilihan karakter tidak tersedia untuk tema ini.');
-    }
+  const { data: variant, error: variantErr } = await supabase
+    .from('theme_character_variants')
+    .select('id, theme_id, gender, hair_type_label, face_attribute_label, variant_name, image_url, is_active')
+    .eq('id', body.selected_character_variant_id)
+    .maybeSingle();
+
+  if (variantErr) return err('Gagal memeriksa pilihan karakter.', 500);
+  if (!variant || !variant.is_active || variant.theme_id !== theme.id || variant.gender !== body.character_gender) {
+    return err('Pilihan karakter tidak tersedia untuk tema ini.');
   }
 
   // theme_package_codes check
@@ -429,6 +431,11 @@ export async function POST(req: NextRequest) {
     outfit_color: body.outfit_color || null,
     special_notes: [
       codeContext.isTrial ? `TRIAL ORDER${codeContext.trialLabel ? `: ${codeContext.trialLabel}` : ''}` : '',
+      `Character variant ID: ${variant.id}`,
+      variant.variant_name ? `Variant: ${variant.variant_name}` : '',
+      `Hair Type: ${variant.hair_type_label}`,
+      `Face Attribute: ${variant.face_attribute_label}`,
+      `Character Image: ${variant.image_url}`,
       body.special_notes || '',
     ].filter(Boolean).join('\n') || null,
     pronunciation_note: body.pronunciation_note || null,

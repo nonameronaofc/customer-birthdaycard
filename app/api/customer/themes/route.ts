@@ -70,10 +70,37 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  const { data: variantThemeRows, error: variantThemeError } = await supabase
+    .from('theme_character_variants')
+    .select('theme_id')
+    .in('theme_id', eligibleIds)
+    .eq('gender', gender)
+    .eq('is_active', true);
+
+  if (variantThemeError) {
+    return NextResponse.json({ error: 'Gagal memuat karakter tema.' }, { status: 500 });
+  }
+
+  const themeIdsWithCharacters = Array.from(
+    new Set((variantThemeRows || []).map((row) => row.theme_id).filter(Boolean))
+  );
+  if (themeIdsWithCharacters.length === 0) {
+    return cachedJson({
+      themes: [],
+      pagination: {
+        total: 0,
+        limit,
+        offset,
+        has_previous: offset > 0,
+        has_next: false,
+      },
+    });
+  }
+
   const { data: themes, error: themesError, count } = await supabase
     .from('themes')
     .select('*', { count: 'exact' })
-    .in('id', eligibleIds)
+    .in('id', themeIdsWithCharacters)
     .eq('gender', gender)
     .eq('parents_content', parentsContent)
     .eq('is_active', true)

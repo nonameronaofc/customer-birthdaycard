@@ -15,6 +15,7 @@ export const PACKAGE_LABELS: Record<PackageCode, string> = {
 export const LIVE_PACKAGES: PackageCode[] = ['RL', 'SL'];
 
 export const ORDER_CODE_REGEX = /^(HM|RG|ST|RL|SL)[A-Z0-9+!%&]{7}[A-Z0-9]$/;
+export const TRIAL_CODE_REGEX = /^[A-Z0-9][A-Z0-9_-]{2,31}$/;
 
 export const GENDERS = ['boy', 'girl'] as const;
 export type Gender = (typeof GENDERS)[number];

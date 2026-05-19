@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSupabase } from '@/lib/supabase';
-import { validateOrderCode } from '@/lib/validation';
-import { LIVE_PACKAGES, PACKAGE_LABELS, type PackageCode } from '@/lib/constants';
+import { validateEntryCode, validateOrderCode } from '@/lib/validation';
+import { LIVE_PACKAGES, PACKAGE_LABELS, TRIAL_CODE_REGEX, type PackageCode } from '@/lib/constants';
 import { isLocale, packageLabel, type Locale } from '@/lib/i18n';
 
 export const runtime = 'nodejs';
@@ -17,6 +17,47 @@ function msg(locale: Locale, id: string, en: string) {
   return locale === 'en' ? en : id;
 }
 
+async function readTrialSettings(supabase: ReturnType<typeof getServerSupabase>) {
+  const { data } = await supabase
+    .from('admin_settings')
+    .select('value_json')
+    .eq('key', 'trial_order_settings')
+    .maybeSingle();
+
+  const value = data?.value_json as { enabled?: boolean } | null | undefined;
+  return { enabled: value?.enabled === true };
+}
+
+async function validateTrialCode(
+  supabase: ReturnType<typeof getServerSupabase>,
+  code: string,
+  locale: Locale
+) {
+  if (!TRIAL_CODE_REGEX.test(code)) return null;
+
+  const settings = await readTrialSettings(supabase);
+  if (!settings.enabled) return null;
+
+  const { data, error } = await supabase
+    .from('trial_codes')
+    .select('id, code, label, package_code, is_active')
+    .eq('code', code)
+    .maybeSingle();
+
+  if (error || !data || !data.is_active) return null;
+  const pkg = data.package_code as PackageCode;
+
+  return NextResponse.json({
+    valid: true,
+    trial_mode: true,
+    trial_code_id: data.id,
+    package_code: pkg,
+    package_label: `${packageLabel(pkg, PACKAGE_LABELS[pkg], locale)} Trial`,
+    live_session_id: null,
+    live_session_name: null,
+  });
+}
+
 export async function POST(req: NextRequest) {
   let body: Body;
   try {
@@ -27,7 +68,7 @@ export async function POST(req: NextRequest) {
 
   const code = (body.code || '').trim().toUpperCase();
   const locale: Locale = isLocale(body.locale) ? body.locale : 'id';
-  const codeCheck = validateOrderCode(code, locale);
+  const codeCheck = validateEntryCode(code, locale);
   if (!codeCheck.ok) {
     return NextResponse.json(
       { error: codeCheck.error, hint: codeCheck.hint, example: codeCheck.example },
@@ -38,6 +79,7 @@ export async function POST(req: NextRequest) {
   const supabase = getServerSupabase();
 
   // Cek kode di table order_codes
+  const normalCodeCheck = validateOrderCode(code, locale);
   const { data: codeRow, error: codeErr } = await supabase
     .from('order_codes')
     .select('id, code, package_code, status, live_session_id')
@@ -48,6 +90,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: msg(locale, 'Gagal memeriksa kode.', 'Failed to check the code.') }, { status: 500 });
   }
   if (!codeRow) {
+    const trialResponse = await validateTrialCode(supabase, code, locale);
+    if (trialResponse) return trialResponse;
+    if (!normalCodeCheck.ok) {
+      return NextResponse.json({ error: msg(locale, 'Kode trial tidak ditemukan atau sedang nonaktif.', 'Trial code was not found or is inactive.') }, { status: 404 });
+    }
     return NextResponse.json({ error: msg(locale, 'Kode pesanan tidak ditemukan.', 'Order code was not found.') }, { status: 404 });
   }
   if (codeRow.status === 'used') {

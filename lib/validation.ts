@@ -3,6 +3,7 @@ import {
   HAIR_REGEX,
   EYE_REGEX,
   PACKAGE_CODES,
+  TRIAL_CODE_REGEX,
   GENDERS,
   PARENTS_CONTENTS,
 } from './constants';
@@ -70,6 +71,25 @@ export function validateOrderCode(raw: string, locale: Locale = 'id'): Validatio
       'HM7A!9KQ2P'
     );
   }
+  return ok();
+}
+
+export function validateEntryCode(raw: string, locale: Locale = 'id'): ValidationResult {
+  const code = (raw || '').trim().toUpperCase();
+  const orderCode = validateOrderCode(code, locale);
+  if (orderCode.ok) return orderCode;
+
+  if (!code) return orderCode;
+  if (!TRIAL_CODE_REGEX.test(code)) {
+    return fail(
+      en(locale) ? 'Invalid code format.' : 'Format kode tidak valid.',
+      en(locale)
+        ? 'Use a 10-character order code or an active trial code from admin.'
+        : 'Gunakan kode pesanan 10 karakter atau kode trial aktif dari admin.',
+      'HM7A!9KQ2P / TRIAL2026'
+    );
+  }
+
   return ok();
 }
 

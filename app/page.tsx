@@ -17,6 +17,7 @@ import {
 } from '@/lib/constants';
 import {
   validateOrderCode,
+  validateEntryCode,
   validateCustomerName,
   validateWhatsapp,
   validateEmail,
@@ -701,7 +702,7 @@ export default function CustomerPage() {
   const canGoNext = useMemo(() => {
     switch (s.step) {
       case 1:
-        return validateOrderCode(s.order_code, locale).ok && !adminBlocked && !validatingCode;
+        return validateEntryCode(s.order_code, locale).ok && !adminBlocked && !validatingCode;
       case 2:
         return (
           validateCustomerName(s.customer_name, locale).ok &&
@@ -982,8 +983,8 @@ function Step1(props: {
           inputMode="text"
           value={props.value}
           onChange={(e) => props.onChange(e.target.value.toUpperCase().trim())}
-          maxLength={10}
-          placeholder="HM7A!9KQ2P"
+          maxLength={32}
+          placeholder="HM7A!9KQ2P / TRIAL2026"
           autoComplete="off"
           spellCheck={false}
           disabled={props.blocked || props.validating}

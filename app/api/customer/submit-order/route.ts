@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSupabase } from '@/lib/supabase';
 import {
   validateOrderCode,
+  validateEntryCode,
   validateCustomerName,
   validateEmail,
   validateChildNickname,
@@ -18,6 +19,7 @@ import {
   buildAssetCode,
   LIVE_PACKAGES,
   PACKAGE_LABELS,
+  TRIAL_CODE_REGEX,
   type Gender,
   type PackageCode,
 } from '@/lib/constants';
@@ -91,6 +93,14 @@ type Payload = {
   pronunciation_note?: string;
 };
 
+type CodeContext = {
+  isTrial: boolean;
+  packageCode: PackageCode;
+  trialCodeId: string | null;
+  trialLabel: string | null;
+  liveSessionId: string | null;
+};
+
 function err(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
@@ -144,6 +154,70 @@ async function isCustomerVisibleStyle(
   return !!data.is_visible;
 }
 
+async function readTrialSettings(supabase: ReturnType<typeof getServerSupabase>) {
+  const { data } = await supabase
+    .from('admin_settings')
+    .select('value_json')
+    .eq('key', 'trial_order_settings')
+    .maybeSingle();
+
+  const value = data?.value_json as { enabled?: boolean } | null | undefined;
+  return { enabled: value?.enabled === true };
+}
+
+async function loadCodeContext(
+  supabase: ReturnType<typeof getServerSupabase>,
+  code: string
+): Promise<CodeContext | { error: string; status?: number }> {
+  const { data: orderCode, error: orderCodeErr } = await supabase
+    .from('order_codes')
+    .select('code, package_code, status, live_session_id')
+    .eq('code', code)
+    .maybeSingle();
+
+  if (orderCodeErr) return { error: 'Gagal memeriksa kode pesanan.', status: 500 };
+  if (orderCode) {
+    if (orderCode.status !== 'unused') {
+      return { error: `Kode pesanan sudah ${orderCode.status} atau tidak berlaku.`, status: 409 };
+    }
+    return {
+      isTrial: false,
+      packageCode: orderCode.package_code as PackageCode,
+      trialCodeId: null,
+      trialLabel: null,
+      liveSessionId: orderCode.live_session_id,
+    };
+  }
+
+  if (!TRIAL_CODE_REGEX.test(code)) {
+    return { error: 'Kode pesanan tidak ditemukan.', status: 404 };
+  }
+
+  const settings = await readTrialSettings(supabase);
+  if (!settings.enabled) {
+    return { error: 'Kode trial sedang nonaktif.', status: 403 };
+  }
+
+  const { data: trialCode, error: trialErr } = await supabase
+    .from('trial_codes')
+    .select('id, code, label, package_code, is_active')
+    .eq('code', code)
+    .maybeSingle();
+
+  if (trialErr) return { error: 'Gagal memeriksa kode trial.', status: 500 };
+  if (!trialCode || !trialCode.is_active) {
+    return { error: 'Kode trial tidak ditemukan atau sedang nonaktif.', status: 404 };
+  }
+
+  return {
+    isTrial: true,
+    packageCode: trialCode.package_code as PackageCode,
+    trialCodeId: trialCode.id,
+    trialLabel: trialCode.label || null,
+    liveSessionId: null,
+  };
+}
+
 export async function POST(req: NextRequest) {
   let body: Payload;
   try {
@@ -157,7 +231,7 @@ export async function POST(req: NextRequest) {
 
   // ============ FIELD-LEVEL VALIDATION ============
   const checks = [
-    validateOrderCode(body.order_code),
+    validateEntryCode(body.order_code),
     validateCustomerName(body.nama_pemesan),
     validateWhatsappFull(body.whatsapp_full),
     validateEmail(body.email || ''),
@@ -175,8 +249,14 @@ export async function POST(req: NextRequest) {
   if (!body.theme_code) return err('Tema wajib dipilih.');
 
   const supabase = getServerSupabase();
-  const packageCode = body.order_code.slice(0, 2) as PackageCode;
-  const packageLabel = PACKAGE_LABELS[packageCode];
+  const cleanCode = body.order_code.trim().toUpperCase();
+  const codeContext = await loadCodeContext(supabase, cleanCode);
+  if ('error' in codeContext) return err(codeContext.error, codeContext.status || 400);
+
+  const packageCode = codeContext.packageCode;
+  const packageLabel = codeContext.isTrial
+    ? `${PACKAGE_LABELS[packageCode]} Trial`
+    : PACKAGE_LABELS[packageCode];
 
   const [hairVisible, eyeglassesVisible] = await Promise.all([
     isCustomerVisibleStyle(supabase, 'hair', body.hair_style_code),
@@ -217,12 +297,11 @@ export async function POST(req: NextRequest) {
   }
 
   // theme_package_codes check
-  const pkgPrefix = body.order_code.slice(0, 2);
   const { data: pkgRow } = await supabase
     .from('theme_package_codes')
     .select('id')
     .eq('theme_id', theme.id)
-    .eq('package_code', pkgPrefix)
+    .eq('package_code', packageCode)
     .maybeSingle();
   if (!pkgRow) return err('Tema tidak tersedia untuk paket ini.');
 
@@ -288,11 +367,11 @@ export async function POST(req: NextRequest) {
   }
 
   let liveSessionName: string | null = null;
-  if (LIVE_PACKAGES.includes(packageCode)) {
+  if (!codeContext.isTrial && LIVE_PACKAGES.includes(packageCode)) {
     const { data: codeRow, error: codeRowErr } = await supabase
       .from('order_codes')
       .select('live_session_id')
-      .eq('code', body.order_code)
+      .eq('code', cleanCode)
       .maybeSingle();
     if (codeRowErr) return err('Gagal memeriksa live session.', 500);
 
@@ -311,9 +390,13 @@ export async function POST(req: NextRequest) {
   const today = formatDateOnly(new Date());
   const orderData = {
     public_order_id: generatePublicOrderId(packageCode),
-    order_code: body.order_code,
+    order_code: cleanCode,
+    package_code: packageCode,
     package_label: packageLabel,
     live_session_name: liveSessionName,
+    is_trial: codeContext.isTrial,
+    trial_code_id: codeContext.trialCodeId,
+    trial_code: codeContext.isTrial ? cleanCode : null,
     theme_code: body.theme_code,
     theme_name: theme.name,
     theme_id: theme.id,
@@ -344,7 +427,10 @@ export async function POST(req: NextRequest) {
     skin_tone: body.skin_tone || null,
     hair_color: body.hair_color || null,
     outfit_color: body.outfit_color || null,
-    special_notes: body.special_notes || null,
+    special_notes: [
+      codeContext.isTrial ? `TRIAL ORDER${codeContext.trialLabel ? `: ${codeContext.trialLabel}` : ''}` : '',
+      body.special_notes || '',
+    ].filter(Boolean).join('\n') || null,
     pronunciation_note: body.pronunciation_note || null,
   };
 

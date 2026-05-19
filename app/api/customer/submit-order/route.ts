@@ -75,6 +75,12 @@ type Payload = {
   dad_nickname?: string | null;
   mom_sweetname?: string | null;
   dad_sweetname?: string | null;
+  selected_character_variant_id?: string | null;
+  character_variant_name?: string | null;
+  character_variant_image?: string | null;
+  character_hair_type?: string | null;
+  character_face_attribute?: string | null;
+  captcha_token?: string | null;
   // optional fields per spec
   tanggal_acara?: string;
   deadline_dibutuhkan?: string;
@@ -87,6 +93,39 @@ type Payload = {
 
 function err(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
+}
+
+async function verifyCaptcha(token: string | null | undefined, req: NextRequest) {
+  if (!token) {
+    return { ok: false, error: 'Captcha wajib diselesaikan sebelum submit.' };
+  }
+
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) {
+    return { ok: false, error: 'Captcha belum dikonfigurasi di server.' };
+  }
+
+  const form = new FormData();
+  form.append('secret', secret);
+  form.append('response', token);
+
+  const forwardedFor = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+  const ip = req.headers.get('cf-connecting-ip') || forwardedFor;
+  if (ip) form.append('remoteip', ip);
+
+  try {
+    const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      body: form,
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return { ok: false, error: 'Verifikasi captcha gagal. Silakan coba lagi.' };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'Tidak bisa memverifikasi captcha. Silakan coba lagi.' };
+  }
 }
 
 async function isCustomerVisibleStyle(
@@ -112,6 +151,9 @@ export async function POST(req: NextRequest) {
   } catch {
     return err('Invalid JSON body.');
   }
+
+  const captcha = await verifyCaptcha(body.captcha_token, req);
+  if (!captcha.ok) return err(captcha.error || 'Captcha gagal diverifikasi.');
 
   // ============ FIELD-LEVEL VALIDATION ============
   const checks = [
@@ -159,6 +201,19 @@ export async function POST(req: NextRequest) {
   }
   if (theme.parents_content !== body.parents_content) {
     return err('Parents content tema tidak cocok.');
+  }
+
+  if (body.selected_character_variant_id) {
+    const { data: variant, error: variantErr } = await supabase
+      .from('theme_character_variants')
+      .select('id, theme_id, gender, is_active')
+      .eq('id', body.selected_character_variant_id)
+      .maybeSingle();
+
+    if (variantErr) return err('Gagal memeriksa pilihan karakter.', 500);
+    if (!variant || !variant.is_active || variant.theme_id !== theme.id || variant.gender !== body.character_gender) {
+      return err('Pilihan karakter tidak tersedia untuk tema ini.');
+    }
   }
 
   // theme_package_codes check

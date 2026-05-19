@@ -1,10 +1,10 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ValidatedInput from '@/components/ValidatedInput';
 import ThemeSlideshow from '@/components/ThemeSlideshow';
 import CharacterPreview from '@/components/CharacterPreview';
-import { fetchCustomerStyleOptions, fetchEligibleThemes, type Theme, type ThemePagination } from '@/lib/themes';
+import { fetchCustomerStyleOptions, fetchEligibleThemes, type Theme, type ThemeCharacterVariant, type ThemePagination } from '@/lib/themes';
 import {
   HAIR_CODES,
   EYE_CODES,
@@ -36,6 +36,25 @@ import {
   parentsLabel,
   type Locale,
 } from '@/lib/i18n';
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (
+        container: HTMLElement,
+        options: {
+          sitekey: string;
+          callback: (token: string) => void;
+          'expired-callback': () => void;
+          'error-callback': () => void;
+          theme?: 'light' | 'dark' | 'auto';
+        }
+      ) => string;
+      reset: (widgetId?: string) => void;
+      remove?: (widgetId: string) => void;
+    };
+  }
+}
 
 // ============================================================================
 // STATE TYPES
@@ -73,6 +92,11 @@ type OrderState = {
   dad_nickname: string;
   mom_sweetname: string;
   dad_sweetname: string;
+  selected_character_variant_id: string;
+  character_variant_name: string;
+  character_variant_image: string;
+  character_hair_type: string;
+  character_face_attribute: string;
 };
 
 const INITIAL_STATE: OrderState = {
@@ -92,7 +116,7 @@ const INITIAL_STATE: OrderState = {
   character_gender: 'boy',
   hair_style_code: DEFAULT_HAIR,
   eyeglasses_code: DEFAULT_EYE,
-  parents_content: '',
+  parents_content: 'none',
   theme_code: '',
   theme_name: '',
   theme_image: '',
@@ -102,6 +126,11 @@ const INITIAL_STATE: OrderState = {
   dad_nickname: '',
   mom_sweetname: '',
   dad_sweetname: '',
+  selected_character_variant_id: '',
+  character_variant_name: '',
+  character_variant_image: '',
+  character_hair_type: '',
+  character_face_attribute: '',
 };
 
 const TOTAL_STEPS = 8;
@@ -237,10 +266,20 @@ function clearOrderDraft() {
   window.localStorage.removeItem(DRAFT_STORAGE_KEY);
 }
 
+function pickDefaultVariant(theme: Theme | undefined): ThemeCharacterVariant | null {
+  if (!theme || theme.character_variants.length === 0) return null;
+  return (
+    theme.character_variants.find((variant) => variant.is_default) ||
+    theme.character_variants.find((variant) => variant.is_recommended) ||
+    theme.character_variants[0]
+  );
+}
+
 // ============================================================================
 // MAIN PAGE
 // ============================================================================
 export default function CustomerPage() {
+  const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '';
   const [locale, setLocale] = useState<Locale>('id');
   const [s, setS] = useState<OrderState>(INITIAL_STATE);
   const [orderCodeError, setOrderCodeError] = useState<ValidationResult | null>(null);
@@ -251,6 +290,8 @@ export default function CustomerPage() {
   const [submitError, setSubmitError] = useState('');
   const [orderId, setOrderId] = useState('');
   const [draftReady, setDraftReady] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaError, setCaptchaError] = useState('');
 
   // Theme state
   const [themes, setThemes] = useState<Theme[]>([]);
@@ -270,6 +311,15 @@ export default function CustomerPage() {
     setValidity((prev) => (prev[key] === valid ? prev : { ...prev, [key]: valid }));
   }, []);
 
+  const handleCaptchaToken = useCallback((token: string) => {
+    setCaptchaToken(token);
+    if (token) setCaptchaError('');
+  }, []);
+
+  const handleCaptchaError = useCallback((message: string) => {
+    setCaptchaError(message);
+  }, []);
+
   const update = useCallback(
     <K extends keyof OrderState>(key: K, value: OrderState[K]) => {
       setS((prev) => ({ ...prev, [key]: value }));
@@ -278,6 +328,10 @@ export default function CustomerPage() {
   );
 
   const copy = UI_COPY[locale];
+  const selectedTheme = useMemo(
+    () => themes.find((theme) => theme.theme_code === s.theme_code),
+    [themes, s.theme_code]
+  );
 
   useEffect(() => {
     const draft = readOrderDraft();
@@ -416,7 +470,7 @@ export default function CustomerPage() {
   }, [s.character_gender, s.parents_content, s.package_code]);
 
   useEffect(() => {
-    if (s.step !== 6) return;
+    if (s.step !== 5) return;
     if (!s.package_code || !s.parents_content || !s.character_gender) return;
     let active = true;
     setLoadingThemes(true);
@@ -459,6 +513,7 @@ export default function CustomerPage() {
   // ==========================================================================
   const handleThemeSelect = (theme: Theme) => {
     const nicknameUsage = getNicknameUsage(theme);
+    const defaultVariant = pickDefaultVariant(theme);
     setS((prev) => ({
       ...prev,
       theme_code: theme.theme_code,
@@ -466,15 +521,60 @@ export default function CustomerPage() {
       theme_image: theme.images[0]?.image_url || theme.image_url,
       theme_nickname_usage: nicknameUsage,
       theme_requires_parents_sweetname: !!theme.requires_parents_sweetname,
+      selected_character_variant_id: defaultVariant?.id || '',
+      character_variant_name: defaultVariant?.variant_name || '',
+      character_variant_image: defaultVariant?.image_url || '',
+      character_hair_type: defaultVariant?.hair_type_label || '',
+      character_face_attribute: defaultVariant?.face_attribute_label || '',
+      step: 6,
     }));
+    return;
     // Logika modal sesuai sync spec — independen
-    const needsAny = needsParentNickname(theme) || theme.requires_parents_sweetname;
-    if (s.parents_content === 'none' || !needsAny) {
-      // langsung selected, no modal
-      return;
-    }
-    setPendingTheme(theme);
-    setModalErrors({});
+  };
+
+  const handleVariantSelect = (variant: ThemeCharacterVariant) => {
+    setS((prev) => ({
+      ...prev,
+      selected_character_variant_id: variant.id,
+      character_variant_name: variant.variant_name || '',
+      character_variant_image: variant.image_url,
+      character_hair_type: variant.hair_type_label,
+      character_face_attribute: variant.face_attribute_label,
+    }));
+  };
+
+  const handleParentsFilterChange = (value: ParentsContent) => {
+    setS((prev) => ({
+      ...prev,
+      parents_content: value,
+      theme_code: '',
+      theme_name: '',
+      theme_image: '',
+      theme_nickname_usage: 'none',
+      theme_requires_parents_sweetname: false,
+      selected_character_variant_id: '',
+      character_variant_name: '',
+      character_variant_image: '',
+      character_hair_type: '',
+      character_face_attribute: '',
+    }));
+  };
+
+  const handleGenderChange = (gender: Gender) => {
+    setS((prev) => ({
+      ...prev,
+      character_gender: gender,
+      theme_code: '',
+      theme_name: '',
+      theme_image: '',
+      theme_nickname_usage: 'none',
+      theme_requires_parents_sweetname: false,
+      selected_character_variant_id: '',
+      character_variant_name: '',
+      character_variant_image: '',
+      character_hair_type: '',
+      character_face_attribute: '',
+    }));
   };
 
   const closeModal = () => {
@@ -528,6 +628,14 @@ export default function CustomerPage() {
   // SUBMIT
   // ==========================================================================
   const handleSubmit = async () => {
+    if (!turnstileSiteKey) {
+      setSubmitError('Captcha belum dikonfigurasi. Isi NEXT_PUBLIC_TURNSTILE_SITE_KEY dan TURNSTILE_SECRET_KEY.');
+      return;
+    }
+    if (!captchaToken) {
+      setSubmitError(locale === 'en' ? 'Please complete the captcha before submitting.' : 'Selesaikan captcha dulu sebelum submit.');
+      return;
+    }
     setSubmitting(true);
     setSubmitError('');
     try {
@@ -550,6 +658,19 @@ export default function CustomerPage() {
         dad_nickname: s.dad_nickname || null,
         mom_sweetname: s.mom_sweetname || null,
         dad_sweetname: s.dad_sweetname || null,
+        selected_character_variant_id: s.selected_character_variant_id || null,
+        character_variant_name: s.character_variant_name || null,
+        character_variant_image: s.character_variant_image || null,
+        character_hair_type: s.character_hair_type || null,
+        character_face_attribute: s.character_face_attribute || null,
+        special_notes: [
+          s.selected_character_variant_id ? `Character variant ID: ${s.selected_character_variant_id}` : '',
+          s.character_variant_name ? `Variant: ${s.character_variant_name}` : '',
+          s.character_hair_type ? `Hair Type: ${s.character_hair_type}` : '',
+          s.character_face_attribute ? `Face Attribute: ${s.character_face_attribute}` : '',
+          s.character_variant_image ? `Character Image: ${s.character_variant_image}` : '',
+        ].filter(Boolean).join('\n') || null,
+        captcha_token: captchaToken,
         preferred_language: locale,
       };
       const res = await fetch('/api/customer/submit-order', {
@@ -560,6 +681,7 @@ export default function CustomerPage() {
       const data = await res.json();
       if (!res.ok || !data.ok) {
         setSubmitError(locale === 'en' ? copy.submitFailed : (data.error || copy.submitFailed));
+        setCaptchaToken('');
         return;
       }
       clearOrderDraft();
@@ -567,6 +689,7 @@ export default function CustomerPage() {
       update('step', 8);
     } catch (e) {
       setSubmitError(copy.contactServerFailed);
+      setCaptchaToken('');
     } finally {
       setSubmitting(false);
     }
@@ -592,17 +715,25 @@ export default function CustomerPage() {
           validateBirthdayNumber(s.birthday_number, locale).ok
         );
       case 4:
-        return !!s.character_gender && !!s.hair_style_code && !!s.eyeglasses_code;
+        return !!s.character_gender;
       case 5:
-        return !!s.parents_content;
+        return false;
       case 6:
-        return !!s.theme_code && !pendingTheme;
+        return (
+          !!s.theme_code &&
+          !pendingTheme &&
+          (
+            !selectedTheme ||
+            selectedTheme.character_variants.length === 0 ||
+            !!s.selected_character_variant_id
+          )
+        );
       case 7:
-        return !submitting;
+        return !submitting && !!turnstileSiteKey && !!captchaToken;
       default:
         return false;
     }
-  }, [s, adminBlocked, validatingCode, pendingTheme, submitting, locale]);
+  }, [s, adminBlocked, validatingCode, pendingTheme, submitting, locale, turnstileSiteKey, captchaToken, selectedTheme]);
 
   const goNext = async () => {
     if (!canGoNext) return;
@@ -719,30 +850,30 @@ export default function CustomerPage() {
         {s.step === 4 && (
           <Step4
             gender={s.character_gender}
-            hair={s.hair_style_code}
-            eye={s.eyeglasses_code}
-            hairCodes={visibleHairCodes}
-            eyeCodes={visibleEyeCodes}
-            onChange={update}
+            onChange={handleGenderChange}
           />
         )}
 
         {s.step === 5 && (
           <Step5
-            value={s.parents_content}
-            onChange={(v) => update('parents_content', v)}
+            themes={themes}
+            loading={loadingThemes}
+            pagination={themePagination}
+            parentsContent={s.parents_content as ParentsContent}
+            onParentsChange={handleParentsFilterChange}
+            selectedCode={s.theme_code}
+            onViewDetail={handleThemeSelect}
+            onPreviousPage={handlePreviousThemePage}
+            onNextPage={handleNextThemePage}
           />
         )}
 
         {s.step === 6 && (
           <Step6
-            themes={themes}
-            loading={loadingThemes}
-            pagination={themePagination}
-            selectedCode={s.theme_code}
-            onSelect={handleThemeSelect}
-            onPreviousPage={handlePreviousThemePage}
-            onNextPage={handleNextThemePage}
+            theme={selectedTheme}
+            state={s}
+            onChange={update}
+            onVariantSelect={handleVariantSelect}
           />
         )}
 
@@ -751,6 +882,11 @@ export default function CustomerPage() {
             state={s}
             onEdit={goToStep}
             error={submitError}
+            captchaSiteKey={turnstileSiteKey}
+            captchaToken={captchaToken}
+            captchaError={captchaError}
+            onCaptchaToken={handleCaptchaToken}
+            onCaptchaError={handleCaptchaError}
           />
         )}
 
@@ -773,18 +909,24 @@ export default function CustomerPage() {
               </svg>
             </button>
           )}
-          <button
-            onClick={goNext}
-            disabled={!canGoNext}
-            className={[
-              'flex-1 px-5 py-3.5 rounded-[14px] font-semibold text-[15px] transition-all',
-              canGoNext
-                ? 'bg-ink text-white hover:bg-[#1d1b3a] active:translate-y-px'
-                : 'bg-ink-faint text-white opacity-50 cursor-not-allowed',
-            ].join(' ')}
-          >
-            {s.step === 7 ? (submitting ? copy.submitting : `${copy.submitOrder} ✨`) : (validatingCode ? copy.validating : copy.next)}
-          </button>
+          {s.step !== 5 && (
+            <button
+              onClick={goNext}
+              disabled={!canGoNext}
+              className={[
+                'flex-1 px-5 py-3.5 rounded-[14px] font-semibold text-[15px] transition-all',
+                canGoNext
+                  ? 'bg-ink text-white hover:bg-[#1d1b3a] active:translate-y-px'
+                  : 'bg-ink-faint text-white opacity-50 cursor-not-allowed',
+              ].join(' ')}
+            >
+              {s.step === 7
+                ? (submitting ? copy.submitting : `${copy.submitOrder} ✨`)
+                : s.step === 6
+                  ? (locale === 'en' ? 'Continue with this theme' : 'Lanjut dengan tema ini')
+                  : (validatingCode ? copy.validating : copy.next)}
+            </button>
+          )}
         </nav>
       )}
 
@@ -1089,11 +1231,7 @@ function Step3(props: {
 // ============================================================================
 function Step4(props: {
   gender: Gender;
-  hair: string;
-  eye: string;
-  hairCodes: string[];
-  eyeCodes: string[];
-  onChange: (key: any, val: any) => void;
+  onChange: (gender: Gender) => void;
 }) {
   const { locale, copy } = useLocaleCopy();
   return (
@@ -1113,7 +1251,7 @@ function Step4(props: {
           return (
             <button
               key={g}
-              onClick={() => props.onChange('character_gender', g)}
+              onClick={() => props.onChange(g)}
               className={[
                 'relative bg-paper rounded-[22px] p-4 text-center transition-all border-[2.5px]',
                 selected
@@ -1137,31 +1275,11 @@ function Step4(props: {
         })}
       </div>
 
-      {/* Character preview */}
-      <div className="mb-3.5">
-        <CharacterPreview
-          gender={props.gender}
-          hair={props.hair}
-          eye={props.eye}
-          locale={locale}
-        />
+      <div className="bg-bg-alt rounded-[14px] px-3.5 py-3 text-[12px] leading-relaxed text-ink-soft">
+        {locale === 'en'
+          ? 'Character details are customized after you choose a theme.'
+          : 'Detail karakter dipilih setelah kamu melihat tema yang cocok.'}
       </div>
-
-      {/* Hair grid */}
-      <StyleBlock
-        title="Hair Style"
-        codes={props.hairCodes}
-        selected={props.hair}
-        onSelect={(v) => props.onChange('hair_style_code', v)}
-      />
-
-      {/* Eye grid */}
-      <StyleBlock
-        title="Eyeglasses"
-        codes={props.eyeCodes}
-        selected={props.eye}
-        onSelect={(v) => props.onChange('eyeglasses_code', v)}
-      />
     </div>
   );
 }
@@ -1239,7 +1357,7 @@ function GirlIcon() {
 // ============================================================================
 // STEP 5 — PARENTS CONTENT
 // ============================================================================
-function Step5(props: { value: string; onChange: (v: ParentsContent) => void }) {
+function LegacyStep5(props: { value: string; onChange: (v: ParentsContent) => void }) {
   const { locale, copy } = useLocaleCopy();
   const opts: { v: ParentsContent; icon: string; title: string; desc: string }[] = [
     { v: 'none', icon: '🎈', title: parentsLabel('none', locale), desc: locale === 'en' ? 'Only the child character' : 'Hanya tokoh anak saja' },
@@ -1293,7 +1411,7 @@ function Step5(props: { value: string; onChange: (v: ParentsContent) => void }) 
 // ============================================================================
 // STEP 6 — THEMES
 // ============================================================================
-function Step6(props: {
+function LegacyStep6(props: {
   themes: Theme[];
   loading: boolean;
   pagination: ThemePagination;
@@ -1402,14 +1520,511 @@ function Step6(props: {
 // ============================================================================
 // STEP 7 — REVIEW
 // ============================================================================
+// ============================================================================
+// STEP 5 - THEME LIST
+// ============================================================================
+function Step5(props: {
+  themes: Theme[];
+  loading: boolean;
+  pagination: ThemePagination;
+  parentsContent: ParentsContent;
+  onParentsChange: (value: ParentsContent) => void;
+  selectedCode: string;
+  onViewDetail: (theme: Theme) => void;
+  onPreviousPage: () => void;
+  onNextPage: () => void;
+}) {
+  const { locale, copy } = useLocaleCopy();
+  const [style, setStyle] = useState('');
+  const [color, setColor] = useState('');
+  const [mood, setMood] = useState('');
+  const [recommendedOnly, setRecommendedOnly] = useState(false);
+
+  const parentOptions: { value: ParentsContent; label: string }[] = [
+    { value: 'none', label: parentsLabel('none', locale) },
+    { value: 'single_mom', label: parentsLabel('single_mom', locale) },
+    { value: 'single_father', label: parentsLabel('single_father', locale) },
+    { value: 'mom_and_dad', label: parentsLabel('mom_and_dad', locale) },
+  ];
+
+  const styleOptions = Array.from(new Set(props.themes.flatMap((theme) => theme.style_tags))).filter(Boolean);
+  const colorOptions = Array.from(new Set(props.themes.flatMap((theme) => theme.color_tags))).filter(Boolean);
+  const moodOptions = Array.from(new Set(props.themes.flatMap((theme) => theme.mood_tags))).filter(Boolean);
+
+  const filteredThemes = props.themes.filter((theme) => {
+    if (style && !theme.style_tags.includes(style)) return false;
+    if (color && !theme.color_tags.includes(color)) return false;
+    if (mood && !theme.mood_tags.includes(mood)) return false;
+    if (recommendedOnly && !theme.is_recommended) return false;
+    return true;
+  });
+
+  const visibleThemes = filteredThemes;
+  const pageNumber = Math.floor(props.pagination.offset / props.pagination.limit) + 1;
+  const totalPages = Math.max(1, Math.ceil(props.pagination.total / props.pagination.limit));
+
+  return (
+    <div>
+      <p className="font-display italic text-accent-deep text-[13px] font-medium mb-1">{copy.step} 5</p>
+      <h1 className="font-display font-semibold text-[26px] leading-[1.1] tracking-tight mb-1.5">
+        {copy.themeTitle}
+      </h1>
+      <p className="text-ink-soft text-[14px] leading-relaxed mb-4">
+        {locale === 'en'
+          ? 'Browse the themes first. Tap detail when one feels close.'
+          : 'Lihat-lihat tema dulu. Ketuk detail kalau ada yang terasa cocok.'}
+      </p>
+
+      <div className="mb-4 rounded-[14px] border-[1.5px] border-line-soft bg-bg-alt p-3.5">
+        <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-ink-soft">
+          {locale === 'en' ? 'Who appears in the video' : 'Yang tampil di video'}
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {parentOptions.map((option) => {
+            const active = props.parentsContent === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => props.onParentsChange(option.value)}
+                className={[
+                  'min-h-[42px] rounded-[12px] border-[1.5px] px-3 text-left text-[12px] font-semibold transition-all',
+                  active
+                    ? 'border-accent bg-accent-soft text-accent-deep'
+                    : 'border-line bg-paper text-ink-soft hover:border-accent',
+                ].join(' ')}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mb-4 flex flex-col gap-2">
+        <FilterChips label="Style" value={style} options={styleOptions} onChange={setStyle} />
+        <FilterChips label="Warna" value={color} options={colorOptions} onChange={setColor} />
+        <FilterChips label="Mood" value={mood} options={moodOptions} onChange={setMood} />
+        <button
+          type="button"
+          onClick={() => setRecommendedOnly((value) => !value)}
+          className={[
+            'w-fit rounded-full border-[1.5px] px-3 py-1.5 text-[12px] font-semibold transition-all',
+            recommendedOnly
+              ? 'border-accent bg-accent text-white'
+              : 'border-line bg-paper text-ink-soft hover:border-accent',
+          ].join(' ')}
+        >
+          {locale === 'en' ? 'Recommended only' : 'Rekomendasi saja'}
+        </button>
+      </div>
+
+      {props.loading ? (
+        <div className="py-12 text-center text-ink-faint">
+          <div className="mb-2 inline-block h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+          <div className="text-[13px]">{copy.loadingThemes}</div>
+        </div>
+      ) : props.themes.length === 0 ? (
+        <div className="py-12 text-center text-ink-faint">
+          <div className="text-[13px]">{copy.noThemes}</div>
+          <div className="mt-2 text-[12px]">{copy.changePrevious}</div>
+        </div>
+      ) : visibleThemes.length === 0 ? (
+        <div className="py-10 text-center text-[13px] text-ink-faint">
+          {locale === 'en' ? 'No theme matches this filter.' : 'Belum ada tema yang cocok dengan filter ini.'}
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            {visibleThemes.map((theme) => (
+              <div
+                key={theme.id}
+                className={[
+                  'rounded-[14px] border-[1.5px] bg-paper p-2 transition-all',
+                  props.selectedCode === theme.theme_code ? 'border-accent shadow-[0_0_0_3px_rgba(139,145,232,0.15)]' : 'border-line-soft',
+                ].join(' ')}
+              >
+                <button
+                  type="button"
+                  onClick={() => props.onViewDetail(theme)}
+                  className="block w-full overflow-hidden rounded-[12px] border border-line bg-accent-soft aspect-[9/16]"
+                  aria-label={`${locale === 'en' ? 'View detail' : 'Lihat detail'} ${theme.name}`}
+                >
+                  {theme.images[0]?.image_url || theme.image_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={theme.images[0]?.image_url || theme.image_url}
+                      alt={theme.name}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center px-3 text-center text-[12px] text-ink-faint">
+                      {copy.noImage}
+                    </div>
+                  )}
+                </button>
+                <div className="mt-2 px-1">
+                  <div className="font-display text-[14px] font-semibold leading-tight">{theme.name}</div>
+                  <div className="mt-0.5 font-mono text-[10px] tracking-wider text-ink-faint">{theme.theme_code}</div>
+                  <button
+                    type="button"
+                    onClick={() => props.onViewDetail(theme)}
+                    className="mt-2 w-full rounded-[10px] bg-ink px-3 py-2 text-[12px] font-semibold text-white transition-colors hover:bg-[#1d1b3a]"
+                  >
+                    {locale === 'en' ? 'View detail' : 'Lihat Detail'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={props.onPreviousPage}
+              disabled={!props.pagination.has_previous || props.loading}
+              className="rounded-[12px] border-[1.5px] border-line px-3 py-2 text-[12px] font-semibold text-ink-soft disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <div className="text-[12px] font-semibold text-ink-faint">
+              {pageNumber} / {totalPages}
+            </div>
+            <button
+              type="button"
+              onClick={props.onNextPage}
+              disabled={!props.pagination.has_next || props.loading}
+              className="rounded-[12px] border-[1.5px] border-line px-3 py-2 text-[12px] font-semibold text-ink-soft disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function FilterChips({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  if (options.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">{label}</div>
+      <div className="flex gap-1.5 overflow-x-auto pb-1">
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          className={[
+            'whitespace-nowrap rounded-full border px-3 py-1.5 text-[12px] font-semibold',
+            value === '' ? 'border-accent bg-accent text-white' : 'border-line bg-paper text-ink-soft',
+          ].join(' ')}
+        >
+          Semua
+        </button>
+        {options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onChange(option)}
+            className={[
+              'whitespace-nowrap rounded-full border px-3 py-1.5 text-[12px] font-semibold',
+              value === option ? 'border-accent bg-accent text-white' : 'border-line bg-paper text-ink-soft',
+            ].join(' ')}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// STEP 6 - THEME DETAIL + CHARACTER BUILDER
+// ============================================================================
+function Step6({
+  theme,
+  state,
+  onChange,
+  onVariantSelect,
+}: {
+  theme: Theme | undefined;
+  state: OrderState;
+  onChange: (key: any, val: any) => void;
+  onVariantSelect: (variant: ThemeCharacterVariant) => void;
+}) {
+  const { locale, copy } = useLocaleCopy();
+  const variants = theme?.character_variants || [];
+  const selectedVariant = variants.find((variant) => variant.id === state.selected_character_variant_id) || variants[0];
+  const showMomNick = !!theme && needsParentNickname(theme) && (state.parents_content === 'single_mom' || state.parents_content === 'mom_and_dad');
+  const showDadNick = !!theme && needsParentNickname(theme) && (state.parents_content === 'single_father' || state.parents_content === 'mom_and_dad');
+  const showMomSweet = !!theme?.requires_parents_sweetname && (state.parents_content === 'single_mom' || state.parents_content === 'mom_and_dad');
+  const showDadSweet = !!theme?.requires_parents_sweetname && (state.parents_content === 'single_father' || state.parents_content === 'mom_and_dad');
+  const hairOptions = Array.from(new Map(variants.map((variant) => [variant.hair_type_key, variant])).values());
+  const faceOptions = Array.from(new Map(variants.map((variant) => [variant.face_attribute_key, variant])).values());
+  const nicknameMessage = theme ? nicknameUsageMessage(getNicknameUsage(theme), locale) : '';
+  const sweetnameMessage = theme ? sweetnameUsageMessage(!!theme.requires_parents_sweetname, locale) : '';
+
+  if (!theme) {
+    return (
+      <div>
+        <p className="font-display italic text-accent-deep text-[13px] font-medium mb-1">{copy.step} 6</p>
+        <h1 className="font-display font-semibold text-[26px] leading-[1.1] tracking-tight mb-1.5">
+          {locale === 'en' ? 'Theme detail' : 'Detail Tema'}
+        </h1>
+        <div className="rounded-[14px] border border-line bg-bg-alt p-4 text-[13px] text-ink-soft">
+          {locale === 'en' ? 'Choose a theme first.' : 'Pilih tema dulu dari halaman sebelumnya.'}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="font-display italic text-accent-deep text-[13px] font-medium mb-1">{copy.step} 6</p>
+      <h1 className="font-display font-semibold text-[26px] leading-[1.1] tracking-tight mb-1.5">
+        {theme.name}
+      </h1>
+      <p className="mb-4 font-mono text-[11px] tracking-wider text-ink-faint">{theme.theme_code}</p>
+
+      <ThemeDetailPreview images={theme.images} fallback={theme.image_url} name={theme.name} />
+
+      <section className="mt-5">
+        <div className="mb-1 font-display text-[18px] font-semibold">
+          {locale === 'en' ? 'Custom your character here' : 'Custom karakter di sini'}
+        </div>
+        <p className="mb-3 text-[12px] leading-relaxed text-ink-soft">
+          {locale === 'en'
+            ? 'Pick the available hair and face options for this theme.'
+            : 'Pilih hair type dan face attribute yang tersedia untuk tema ini.'}
+        </p>
+
+        {variants.length === 0 ? (
+          <div className="rounded-[14px] border border-[#f2d48c] bg-[#fff8e8] p-3 text-[13px] text-ink-soft">
+            {locale === 'en'
+              ? 'Character options for this theme are not ready yet.'
+              : 'Pilihan karakter untuk tema ini belum diinput admin.'}
+          </div>
+        ) : (
+          <>
+            <div className="mb-4 flex justify-center rounded-[16px] border-[1.5px] border-line-soft bg-bg-alt px-3 py-4">
+              <div className="w-56">
+                <div className="mx-auto h-64 w-56 animate-float-char overflow-hidden rounded-[14px] bg-paper">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={selectedVariant.image_url}
+                    alt={selectedVariant.variant_name || theme.name}
+                    className="h-full w-full object-contain"
+                  />
+                </div>
+                <div className="mx-auto mt-2 h-3 w-24 animate-shadow-pulse rounded-full bg-black/10" />
+              </div>
+            </div>
+
+            <VariantChips
+              label="Hair Type"
+              variants={hairOptions}
+              selectedKey={selectedVariant.hair_type_key}
+              getKey={(variant) => variant.hair_type_key}
+              getLabel={(variant) => variant.hair_type_label}
+              onSelect={onVariantSelect}
+            />
+            <VariantChips
+              label="Face Attribute"
+              variants={faceOptions}
+              selectedKey={selectedVariant.face_attribute_key}
+              getKey={(variant) => variant.face_attribute_key}
+              getLabel={(variant) => variant.face_attribute_label}
+              onSelect={onVariantSelect}
+            />
+          </>
+        )}
+      </section>
+
+      {(nicknameMessage || sweetnameMessage || showMomNick || showDadNick || showMomSweet || showDadSweet) && (
+        <section className="mt-5 rounded-[16px] border-[1.5px] border-line-soft bg-paper p-3.5">
+          <div className="mb-2 font-display text-[17px] font-semibold">
+            {locale === 'en' ? 'Parent names' : 'Nama orang tua'}
+          </div>
+          {nicknameMessage && <p className="m-0 mb-2 text-[12px] leading-relaxed text-accent-deep">{nicknameMessage}</p>}
+          {sweetnameMessage && <p className="m-0 mb-3 text-[12px] leading-relaxed text-accent-deep">{sweetnameMessage}</p>}
+
+          {showMomNick && (
+            <ValidatedInput
+              label={copy.momNickname}
+              required
+              value={state.mom_nickname}
+              onChange={(value) => onChange('mom_nickname', value)}
+              validator={(value) => validateParentNickname(value, 'mom', locale)}
+              maxLength={16}
+              showCounter
+              helperText={copy.max16OneSpace}
+              exampleLabel={copy.example}
+            />
+          )}
+          {showDadNick && (
+            <ValidatedInput
+              label={copy.dadNickname}
+              required
+              value={state.dad_nickname}
+              onChange={(value) => onChange('dad_nickname', value)}
+              validator={(value) => validateParentNickname(value, 'dad', locale)}
+              maxLength={16}
+              showCounter
+              helperText={copy.max16OneSpace}
+              exampleLabel={copy.example}
+            />
+          )}
+          {showMomSweet && (
+            <ValidatedInput
+              label={copy.momSweetname}
+              required
+              value={state.mom_sweetname}
+              onChange={(value) => onChange('mom_sweetname', value)}
+              validator={(value) => validateParentSweetname(value, 'mom', locale)}
+              maxLength={16}
+              showCounter
+              helperText={copy.max16OneSpace}
+              exampleLabel={copy.example}
+            />
+          )}
+          {showDadSweet && (
+            <ValidatedInput
+              label={copy.dadSweetname}
+              required
+              value={state.dad_sweetname}
+              onChange={(value) => onChange('dad_sweetname', value)}
+              validator={(value) => validateParentSweetname(value, 'dad', locale)}
+              maxLength={16}
+              showCounter
+              helperText={copy.max16OneSpace}
+              exampleLabel={copy.example}
+            />
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function ThemeDetailPreview({
+  images,
+  fallback,
+  name,
+}: {
+  images: { image_url: string }[];
+  fallback: string;
+  name: string;
+}) {
+  const [index, setIndex] = useState(0);
+  const previewImages = (images.length > 0 ? images : fallback ? [{ image_url: fallback }] : []).slice(0, 5);
+
+  useEffect(() => {
+    if (previewImages.length <= 1) return;
+    const timer = window.setInterval(() => {
+      setIndex((value) => (value + 1) % previewImages.length);
+    }, 2600);
+    return () => window.clearInterval(timer);
+  }, [previewImages.length]);
+
+  return (
+    <div className="overflow-hidden rounded-[16px] border-[1.5px] border-line-soft bg-accent-soft">
+      <div className="aspect-[9/16] w-full">
+        {previewImages[index]?.image_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={previewImages[index].image_url} alt={name} className="h-full w-full object-contain" />
+        ) : (
+          <div className="flex h-full items-center justify-center text-[13px] text-ink-faint">No image</div>
+        )}
+      </div>
+      {previewImages.length > 1 && (
+        <div className="flex justify-center gap-1.5 bg-paper px-3 py-2">
+          {previewImages.map((image, imageIndex) => (
+            <span
+              key={`${image.image_url}-${imageIndex}`}
+              className={[
+                'h-1.5 rounded-full transition-all',
+                index === imageIndex ? 'w-5 bg-accent' : 'w-1.5 bg-line',
+              ].join(' ')}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VariantChips({
+  label,
+  variants,
+  selectedKey,
+  getKey,
+  getLabel,
+  onSelect,
+}: {
+  label: string;
+  variants: ThemeCharacterVariant[];
+  selectedKey: string;
+  getKey: (variant: ThemeCharacterVariant) => string;
+  getLabel: (variant: ThemeCharacterVariant) => string;
+  onSelect: (variant: ThemeCharacterVariant) => void;
+}) {
+  return (
+    <div className="mb-3">
+      <div className="mb-1.5 text-[12px] font-semibold uppercase tracking-wide text-ink-soft">{label}</div>
+      <div className="flex flex-wrap gap-2">
+        {variants.map((variant) => {
+          const key = getKey(variant);
+          const active = selectedKey === key;
+          return (
+            <button
+              key={`${label}-${key}-${variant.id}`}
+              type="button"
+              onClick={() => onSelect(variant)}
+              className={[
+                'rounded-full border-[1.5px] px-3 py-2 text-[12px] font-semibold transition-all',
+                active
+                  ? 'border-accent bg-accent text-white'
+                  : 'border-line bg-paper text-ink-soft hover:border-accent',
+              ].join(' ')}
+            >
+              {getLabel(variant)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Step7({
   state,
   onEdit,
   error,
+  captchaSiteKey,
+  captchaToken,
+  captchaError,
+  onCaptchaToken,
+  onCaptchaError,
 }: {
   state: OrderState;
   onEdit: (n: number) => void;
   error: string;
+  captchaSiteKey: string;
+  captchaToken: string;
+  captchaError: string;
+  onCaptchaToken: (token: string) => void;
+  onCaptchaError: (message: string) => void;
 }) {
   const { locale, copy } = useLocaleCopy();
   const wa = `${state.country_code}${state.whatsapp_number}`;
@@ -1453,20 +2068,28 @@ function Step7({
       {/* KARAKTER — sekarang dengan preview asset */}
       <ReviewBlock title={copy.character} onEdit={() => onEdit(4)}>
         <div className="my-2">
-          <div className="scale-90 origin-top">
-            <CharacterPreview
-              gender={state.character_gender}
-              hair={state.hair_style_code}
-              eye={state.eyeglasses_code}
-              showCaption={false}
-              size="md"
-              locale={locale}
-            />
-          </div>
+          {state.character_variant_image ? (
+            <div className="mx-auto h-64 w-56 animate-float-char overflow-hidden rounded-[14px] bg-bg-alt">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={state.character_variant_image} alt={state.character_variant_name || copy.character} className="h-full w-full object-contain" />
+            </div>
+          ) : (
+            <div className="scale-90 origin-top">
+              <CharacterPreview
+                gender={state.character_gender}
+                hair={state.hair_style_code}
+                eye={state.eyeglasses_code}
+                showCaption={false}
+                size="md"
+                locale={locale}
+              />
+            </div>
+          )}
         </div>
         <Row k="Gender" v={state.character_gender === 'boy' ? 'Boy' : 'Girl'} />
-        <Row k="Hair Style" v={state.hair_style_code} mono />
-        <Row k="Eyeglasses" v={state.eyeglasses_code} mono />
+        {state.character_hair_type && <Row k="Hair Type" v={state.character_hair_type} />}
+        {state.character_face_attribute && <Row k="Face Attribute" v={state.character_face_attribute} />}
+        {state.character_variant_name && <Row k="Variant" v={state.character_variant_name} />}
         <Row k={copy.assetCode} v={assetCode} mono />
       </ReviewBlock>
 
@@ -1500,11 +2123,119 @@ function Step7({
         ))}
       </ReviewBlock>
 
+      <CaptchaBox
+        siteKey={captchaSiteKey}
+        token={captchaToken}
+        error={captchaError}
+        locale={locale}
+        onToken={onCaptchaToken}
+        onError={onCaptchaError}
+      />
+
       {error && (
         <div className="mt-4 p-3 rounded-[10px] bg-[#fff4f6] border border-[#f6c8d2] text-[13px] text-danger">
           ⚠ {error}
         </div>
       )}
+    </div>
+  );
+}
+
+const TURNSTILE_SCRIPT_ID = 'cloudflare-turnstile-script';
+
+function CaptchaBox({
+  siteKey,
+  token,
+  error,
+  locale,
+  onToken,
+  onError,
+}: {
+  siteKey: string;
+  token: string;
+  error: string;
+  locale: Locale;
+  onToken: (token: string) => void;
+  onError: (message: string) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const widgetIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!siteKey || !containerRef.current) return;
+
+    let cancelled = false;
+    const renderWidget = () => {
+      if (cancelled || !containerRef.current || !window.turnstile || widgetIdRef.current) return;
+      widgetIdRef.current = window.turnstile.render(containerRef.current, {
+        sitekey: siteKey,
+        theme: 'light',
+        callback: (nextToken) => {
+          onToken(nextToken);
+          onError('');
+        },
+        'expired-callback': () => {
+          onToken('');
+          onError(locale === 'en' ? 'Captcha expired. Please verify again.' : 'Captcha kedaluwarsa. Silakan centang ulang.');
+        },
+        'error-callback': () => {
+          onToken('');
+          onError(locale === 'en' ? 'Captcha failed to load. Please refresh the page.' : 'Captcha gagal dimuat. Silakan refresh halaman.');
+        },
+      });
+    };
+
+    if (window.turnstile) {
+      renderWidget();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    let script = document.getElementById(TURNSTILE_SCRIPT_ID) as HTMLScriptElement | null;
+    if (!script) {
+      script = document.createElement('script');
+      script.id = TURNSTILE_SCRIPT_ID;
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+
+    script.addEventListener('load', renderWidget);
+    return () => {
+      cancelled = true;
+      script?.removeEventListener('load', renderWidget);
+      if (widgetIdRef.current && window.turnstile?.remove) {
+        window.turnstile.remove(widgetIdRef.current);
+        widgetIdRef.current = null;
+      }
+    };
+  }, [siteKey, onToken, onError, locale]);
+
+  useEffect(() => {
+    if (!token && widgetIdRef.current) {
+      window.turnstile?.reset(widgetIdRef.current);
+    }
+  }, [token]);
+
+  if (!siteKey) {
+    return (
+      <div className="mt-4 p-3 rounded-[10px] bg-[#fff8e8] border border-[#f2d48c] text-[13px] text-ink-soft">
+        {locale === 'en'
+          ? 'Captcha is not active yet. Add the Turnstile env keys before opening submit for customers.'
+          : 'Captcha belum aktif. Isi env Turnstile sebelum membuka submit untuk customer.'}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 border-[1.5px] border-line-soft rounded-[14px] p-3.5 bg-paper">
+      <div className="font-display text-[14px] font-semibold mb-2">
+        {locale === 'en' ? 'Security confirmation' : 'Konfirmasi keamanan'}
+      </div>
+      <div ref={containerRef} />
+      {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
   );
 }

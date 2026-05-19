@@ -77,6 +77,8 @@ export async function GET(req: NextRequest) {
     .eq('gender', gender)
     .eq('parents_content', parentsContent)
     .eq('is_active', true)
+    .order('is_recommended', { ascending: false })
+    .order('display_priority', { ascending: false })
     .order('name')
     .range(offset, offset + limit - 1);
 
@@ -135,6 +137,22 @@ export async function GET(req: NextRequest) {
     imagesByTheme.set(image.theme_id, [...existing, row]);
   });
 
+  const { data: variants, error: variantsError } = await supabase
+    .from('theme_character_variants')
+    .select('id, theme_id, gender, hair_type_label, hair_type_key, face_attribute_label, face_attribute_key, variant_name, image_url, is_default, is_recommended, is_active, display_order')
+    .in('theme_id', themeIds)
+    .eq('gender', gender)
+    .eq('is_active', true)
+    .order('display_order');
+
+  const variantsByTheme = new Map<string, any[]>();
+  if (!variantsError) {
+    (variants || []).forEach((variant) => {
+      const existing = variantsByTheme.get(variant.theme_id) || [];
+      variantsByTheme.set(variant.theme_id, [...existing, variant]);
+    });
+  }
+
   return cachedJson({
     themes: themes.map((theme) => {
       const themeImages = (imagesByTheme.get(theme.id) || []).slice(0, 3);
@@ -152,11 +170,17 @@ export async function GET(req: NextRequest) {
         requires_parents_sweetname: !!theme.requires_parents_sweetname,
         image_url: theme.image_url,
         is_active: theme.is_active,
+        style_tags: Array.isArray(theme.style_tags) ? theme.style_tags : [],
+        color_tags: Array.isArray(theme.color_tags) ? theme.color_tags : [],
+        mood_tags: Array.isArray(theme.mood_tags) ? theme.mood_tags : [],
+        is_recommended: !!theme.is_recommended,
+        display_priority: Number(theme.display_priority || 0),
         images: themeImages.length > 0
           ? themeImages
           : theme.image_url
             ? [{ id: theme.id, image_url: theme.image_url, position: 0 }]
             : [],
+        character_variants: variantsByTheme.get(theme.id) || [],
       };
     }),
     pagination: {

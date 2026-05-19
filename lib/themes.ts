@@ -6,6 +6,22 @@ export type ThemeImage = {
   position: number;
 };
 
+export type ThemeCharacterVariant = {
+  id: string;
+  theme_id: string;
+  gender: Gender;
+  hair_type_label: string;
+  hair_type_key: string;
+  face_attribute_label: string;
+  face_attribute_key: string;
+  variant_name: string | null;
+  image_url: string;
+  is_default: boolean;
+  is_recommended: boolean;
+  is_active: boolean;
+  display_order: number;
+};
+
 export type Theme = {
   id: string;
   theme_code: string;
@@ -18,7 +34,13 @@ export type Theme = {
   requires_parents_sweetname: boolean;
   image_url: string;
   is_active: boolean;
+  style_tags: string[];
+  color_tags: string[];
+  mood_tags: string[];
+  is_recommended: boolean;
+  display_priority: number;
   images: ThemeImage[];
+  character_variants: ThemeCharacterVariant[];
 };
 
 export type ThemePagination = {

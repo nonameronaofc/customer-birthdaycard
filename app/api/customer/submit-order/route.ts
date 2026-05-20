@@ -9,14 +9,13 @@ import {
   validateChildFullName,
   validateBirthdayNumber,
   validateGender,
-  validateHair,
-  validateEye,
   validateParentsContent,
   validateParentNickname,
   validateParentSweetname,
 } from '@/lib/validation';
 import {
-  buildAssetCode,
+  DEFAULT_EYE,
+  DEFAULT_HAIR,
   LIVE_PACKAGES,
   PACKAGE_LABELS,
   TRIAL_CODE_REGEX,
@@ -138,22 +137,6 @@ async function verifyCaptcha(token: string | null | undefined, req: NextRequest)
   }
 }
 
-async function isCustomerVisibleStyle(
-  supabase: ReturnType<typeof getServerSupabase>,
-  optionType: 'hair' | 'eyeglasses',
-  optionCode: string
-) {
-  const { data, error } = await supabase
-    .from('customer_style_options')
-    .select('is_visible')
-    .eq('option_type', optionType)
-    .eq('option_code', optionCode)
-    .maybeSingle();
-
-  if (error || !data) return true;
-  return !!data.is_visible;
-}
-
 async function readTrialSettings(supabase: ReturnType<typeof getServerSupabase>) {
   const { data } = await supabase
     .from('admin_settings')
@@ -239,8 +222,6 @@ export async function POST(req: NextRequest) {
     validateChildFullName(body.nama_lengkap_anak),
     validateBirthdayNumber(body.birthday_number),
     validateGender(body.character_gender),
-    validateHair(body.hair_style_code),
-    validateEye(body.eyeglasses_code),
     validateParentsContent(body.parents_content),
   ];
   for (const c of checks) {
@@ -257,14 +238,6 @@ export async function POST(req: NextRequest) {
   const packageLabel = codeContext.isTrial
     ? `${PACKAGE_LABELS[packageCode]} Trial`
     : PACKAGE_LABELS[packageCode];
-
-  const [hairVisible, eyeglassesVisible] = await Promise.all([
-    isCustomerVisibleStyle(supabase, 'hair', body.hair_style_code),
-    isCustomerVisibleStyle(supabase, 'eyeglasses', body.eyeglasses_code),
-  ]);
-  if (!hairVisible || !eyeglassesVisible) {
-    return err('Pilihan hair style atau eyeglasses sudah tidak tersedia untuk customer.');
-  }
 
   // ============ THEME VALIDATION ============
   const { data: theme, error: themeErr } = await supabase
@@ -350,24 +323,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ============ CHARACTER ASSET CHECK ============
-  const assetCode = buildAssetCode(
-    body.character_gender,
-    body.hair_style_code,
-    body.eyeglasses_code
-  );
-  const { data: asset } = await supabase
-    .from('character_assets')
-    .select('id, asset_code, is_active')
-    .eq('gender', body.character_gender)
-    .eq('hair_style_code', body.hair_style_code)
-    .eq('eyeglasses_code', body.eyeglasses_code)
-    .eq('is_active', true)
-    .maybeSingle();
-  if (!asset) {
-    return err('Kombinasi character asset (gender + hair + glasses) tidak tersedia.');
-  }
-
   let liveSessionName: string | null = null;
   if (!codeContext.isTrial && LIVE_PACKAGES.includes(packageCode)) {
     const { data: codeRow, error: codeRowErr } = await supabase
@@ -390,6 +345,7 @@ export async function POST(req: NextRequest) {
 
   // ============ ATOMIC SUBMIT ============
   const today = formatDateOnly(new Date());
+  const legacyCharacterCode = `THEME-VARIANT:${variant.id}`;
   const orderData = {
     public_order_id: generatePublicOrderId(packageCode),
     order_code: cleanCode,
@@ -410,11 +366,11 @@ export async function POST(req: NextRequest) {
     usia_anak: body.usia_anak,
     character_gender: body.character_gender,
     birthday_number: body.birthday_number,
-    hair_style_code: body.hair_style_code,
-    hair_style_name: body.hair_style_code,
-    eyeglasses_code: body.eyeglasses_code,
-    eyeglasses_name: body.eyeglasses_code,
-    character_asset_code: assetCode,
+    hair_style_code: DEFAULT_HAIR,
+    hair_style_name: variant.hair_type_label,
+    eyeglasses_code: DEFAULT_EYE,
+    eyeglasses_name: variant.face_attribute_label,
+    character_asset_code: legacyCharacterCode,
     parents_content: body.parents_content,
     requires_parents_nickname: requiresParentsNickname,
     requires_parents_nickname_video: requiresParentsNicknameVideo,

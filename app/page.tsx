@@ -3,10 +3,8 @@
 import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ValidatedInput from '@/components/ValidatedInput';
 import ThemeSlideshow from '@/components/ThemeSlideshow';
-import { fetchCustomerStyleOptions, fetchEligibleThemes, type Theme, type ThemeCharacterVariant, type ThemePagination } from '@/lib/themes';
+import { fetchEligibleThemes, type Theme, type ThemeCharacterVariant, type ThemePagination } from '@/lib/themes';
 import {
-  HAIR_CODES,
-  EYE_CODES,
   DEFAULT_HAIR,
   DEFAULT_EYE,
   type Gender,
@@ -322,8 +320,6 @@ export default function CustomerPage() {
   const [themeOffset, setThemeOffset] = useState(0);
   const [themePagination, setThemePagination] = useState<ThemePagination>(EMPTY_THEME_PAGINATION);
   const [loadingThemes, setLoadingThemes] = useState(false);
-  const [visibleHairCodes, setVisibleHairCodes] = useState<string[]>(HAIR_CODES);
-  const [visibleEyeCodes, setVisibleEyeCodes] = useState<string[]>(EYE_CODES);
 
   // Modal state
   const [pendingTheme, setPendingTheme] = useState<Theme | null>(null);
@@ -377,37 +373,6 @@ export default function CustomerPage() {
     window.localStorage.setItem(LOCALE_STORAGE_KEY, locale);
     document.documentElement.lang = locale;
   }, [locale]);
-
-  useEffect(() => {
-    let active = true;
-    fetchCustomerStyleOptions()
-      .then((options) => {
-        if (!active) return;
-        const nextHairCodes = options.hair_codes.length > 0 ? options.hair_codes : HAIR_CODES;
-        const nextEyeCodes = options.eyeglasses_codes.length > 0 ? options.eyeglasses_codes : EYE_CODES;
-
-        setVisibleHairCodes(nextHairCodes);
-        setVisibleEyeCodes(nextEyeCodes);
-        setS((current) => ({
-          ...current,
-          hair_style_code: nextHairCodes.includes(current.hair_style_code)
-            ? current.hair_style_code
-            : nextHairCodes[0] ?? DEFAULT_HAIR,
-          eyeglasses_code: nextEyeCodes.includes(current.eyeglasses_code)
-            ? current.eyeglasses_code
-            : nextEyeCodes[0] ?? DEFAULT_EYE,
-        }));
-      })
-      .catch(() => {
-        if (!active) return;
-        setVisibleHairCodes(HAIR_CODES);
-        setVisibleEyeCodes(EYE_CODES);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
 
   // ==========================================================================
   // STEP 1 — Validate code

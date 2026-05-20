@@ -90,32 +90,3 @@ export async function fetchEligibleThemes(opts: {
   };
 }
 
-// Untuk preview asset character — pakai admin asset API yg dishare via storage bucket
-export async function fetchCharacterAssetUrl(opts: {
-  gender: Gender;
-  hair_style_code: string;
-  eyeglasses_code: string;
-}): Promise<string | null> {
-  const params = new URLSearchParams({
-    gender: opts.gender,
-    hair_style_code: opts.hair_style_code,
-    eyeglasses_code: opts.eyeglasses_code,
-  });
-  const res = await fetch(`/api/customer/character-asset?${params.toString()}`);
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.image_url || null;
-}
-
-export async function fetchCustomerStyleOptions(): Promise<{
-  hair_codes: string[];
-  eyeglasses_codes: string[];
-}> {
-  const res = await fetch('/api/customer/style-options');
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Gagal memuat opsi karakter.');
-  return {
-    hair_codes: Array.isArray(data.hair_codes) ? data.hair_codes : [],
-    eyeglasses_codes: Array.isArray(data.eyeglasses_codes) ? data.eyeglasses_codes : [],
-  };
-}
